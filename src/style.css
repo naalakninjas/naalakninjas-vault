@@ -1,0 +1,552 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+@layer base {
+  :root {
+    /* Surfaces: each step is one level closer to the viewer */
+    --surface-base: #08080B;
+    --surface-raised: #101017;
+    --surface-overlay: #16161F;
+    --surface-hover: #1C1C27;
+
+    /* Hairlines */
+    --line-subtle: rgba(255, 255, 255, 0.06);
+    --line-strong: rgba(255, 255, 255, 0.12);
+
+    /* Text ramp */
+    --text-primary: #F4F4F5;
+    --text-secondary: #A1A1AA;
+    --text-tertiary: #71717A;
+
+    /* Accent */
+    --accent: #8B5CF6;
+    --accent-soft: rgba(139, 92, 246, 0.14);
+
+    /* Brand gold, sampled from the vault door artwork. Rings the vault logo the
+       way each ninja's accent rings their avatar. */
+    --brand-gold: #D4A017;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    background: var(--surface-base);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Dark scrollbars so they don't flash white against the theme */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+    background-clip: content-box;
+  }
+
+  /* Keep native form controls dark */
+  input,
+  select,
+  textarea {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  /* ========================================
+     DARK DESIGN SYSTEM
+     Semantic surfaces used by the app shell,
+     dashboard, and page layouts.
+     ======================================== */
+
+  /* Panel: the default content container */
+  .panel {
+    background: var(--surface-raised);
+    border: 1px solid var(--line-subtle);
+    @apply rounded-2xl;
+  }
+
+  /* Panel that responds to pointer interaction */
+  .panel-interactive {
+    @apply panel transition-colors duration-200;
+  }
+
+  .panel-interactive:hover {
+    background: var(--surface-hover);
+    border-color: var(--line-strong);
+  }
+
+  /* Inset: a well recessed inside a panel, for grouped stats */
+  .inset {
+    background: var(--surface-base);
+    border: 1px solid var(--line-subtle);
+    @apply rounded-xl;
+  }
+
+  /* Text ramp */
+  .text-strong {
+    color: var(--text-primary);
+  }
+
+  .text-muted {
+    color: var(--text-secondary);
+  }
+
+  .text-faint {
+    color: var(--text-tertiary);
+  }
+
+  /* Hairline divider */
+  .hairline {
+    border-color: var(--line-subtle);
+  }
+
+  /* Numeric display: tabular figures so digits don't jitter while animating */
+  .numeric {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* Focus ring, applied consistently to every interactive element */
+  .focus-ring:focus-visible {
+    @apply outline-none;
+    box-shadow: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
+  }
+
+  /* ========================================
+     FORM CONTROLS
+     Geometry and fills match the <Button> and
+     <Input> components, so forms styled with
+     these classes sit alongside them without
+     a visible seam.
+     ======================================== */
+
+  .ninja-button {
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .ninja-button:focus-visible {
+    @apply outline-none;
+    box-shadow: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
+  }
+
+  .ninja-button-primary {
+    @apply ninja-button bg-violet-600 text-white hover:bg-violet-500;
+  }
+
+  .ninja-button-ghost {
+    @apply ninja-button text-muted;
+  }
+
+  .ninja-button-ghost:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+  }
+
+  /* Per-ninja buttons, used by the PIN screen so the CTA matches the
+     ninja being unlocked */
+  .ninja-button-emerald {
+    @apply ninja-button bg-gradient-to-r from-ninja-emerald-600 to-ninja-emerald-700 text-white hover:from-ninja-emerald-500 hover:to-ninja-emerald-600 focus:ring-ninja-emerald-500 shadow-ninja-emerald;
+  }
+
+  .ninja-button-crimson {
+    @apply ninja-button bg-gradient-to-r from-ninja-crimson-600 to-ninja-crimson-700 text-white hover:from-ninja-crimson-500 hover:to-ninja-crimson-600 focus:ring-ninja-crimson-500 shadow-ninja-crimson;
+  }
+
+  .ninja-button-azure {
+    @apply ninja-button bg-gradient-to-r from-ninja-azure-600 to-ninja-azure-700 text-white hover:from-ninja-azure-500 hover:to-ninja-azure-600 focus:ring-ninja-azure-500 shadow-ninja-azure;
+  }
+
+  .ninja-button-gold {
+    @apply ninja-button bg-gradient-to-r from-ninja-gold-600 to-ninja-gold-700 text-white hover:from-ninja-gold-500 hover:to-ninja-gold-600 focus:ring-ninja-gold-500 shadow-ninja-gold;
+  }
+
+  .ninja-input {
+    @apply h-11 w-full rounded-xl px-3.5 text-sm transition-colors duration-150;
+    background: var(--surface-base);
+    border: 1px solid var(--line-strong);
+    color: var(--text-primary);
+  }
+
+  .ninja-input::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  .ninja-input:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .ninja-input:focus {
+    @apply outline-none;
+    border-color: var(--accent);
+  }
+
+  /* Textareas need to grow, so opt out of the fixed control height */
+  textarea.ninja-input {
+    @apply h-auto py-2.5;
+  }
+
+  /* Date inputs: hide the native indicator until hover so the control
+     reads as a plain field at rest */
+  .ninja-input[type="date"] {
+    @apply cursor-pointer;
+  }
+
+  .ninja-input[type="date"]::-webkit-calendar-picker-indicator {
+    @apply cursor-pointer opacity-0 absolute right-3 w-4 h-4;
+  }
+
+  .ninja-input[type="date"]:hover::-webkit-calendar-picker-indicator {
+    @apply opacity-100;
+  }
+
+  /* Wrong-PIN feedback */
+  .animate-shake {
+    animation: shake 0.5s ease-in-out;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+    20%, 40%, 60%, 80% { transform: translateX(5px); }
+  }
+
+  /* ========================================
+     MOBILE PROFILE SHEET
+     Bottom sheet opened from the mobile header.
+     Keyframes are namespaced so they can't collide
+     with Tailwind's own fadeIn/slideUp.
+     ======================================== */
+
+  .profile-sheet-overlay {
+    @apply fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm;
+    animation: sheetFadeIn 0.2s ease-out;
+  }
+
+  .profile-sheet {
+    @apply fixed bottom-0 left-0 right-0 overflow-y-auto rounded-t-2xl p-5;
+    background: var(--surface-overlay);
+    border-top: 1px solid var(--line-strong);
+    animation: sheetSlideUp 0.3s ease-out;
+    max-height: 85dvh;
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  }
+
+  @keyframes sheetFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes sheetSlideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  /* ========================================
+     NINJA SELECTION SCREEN
+     The sign-in screen keeps its own richer
+     visual identity, so these styles are scoped
+     to that page and its loading state.
+     ======================================== */
+
+  .bg-gradient-radial {
+    background: radial-gradient(circle, var(--tw-gradient-stops));
+  }
+
+  .mobile-padding {
+    @apply p-2 md:p-6;
+  }
+
+  .fade-in {
+    @apply animate-fade-in;
+  }
+
+  .slide-up {
+    @apply animate-slide-up;
+  }
+
+  /* Vault logo, on both the loading screen and the selection header */
+  .ninja-vault-logo {
+    @apply relative inline-flex items-center justify-center;
+    max-width: 90vw;
+  }
+
+  .ninja-vault-logo img {
+    filter: drop-shadow(0 0 20px rgba(139, 92, 246, 0.3));
+  }
+
+  .ninja-logo-glow {
+    filter: drop-shadow(0 0 12px rgba(99, 102, 241, 0.3));
+    transition: all 0.3s ease;
+    aspect-ratio: 1;
+  }
+
+  .vault-loading-container {
+    @apply flex flex-col items-center justify-center text-center;
+    width: 100%;
+    min-height: 100vh;
+  }
+
+  .vault-loading-logo {
+    @apply w-60 h-60 md:w-96 md:h-96;
+    animation: vaultPulse 2s ease-in-out infinite, vaultRotate 8s linear infinite;
+    filter: drop-shadow(0 0 40px rgba(255, 215, 0, 0.5));
+    object-fit: contain;
+    aspect-ratio: 1;
+  }
+
+  .vault-door-logo {
+    @apply w-28 h-28 md:w-36 md:h-36;
+    transition: all 0.5s ease;
+    aspect-ratio: 1;
+  }
+
+  .loading-text {
+    @apply mt-8;
+  }
+
+  .loading-dots {
+    @apply flex justify-center space-x-1;
+  }
+
+  .loading-dots span {
+    @apply text-yellow-400 text-2xl;
+    animation: loadingDots 1.4s ease-in-out infinite both;
+  }
+
+  .loading-dots span:nth-child(1) { animation-delay: -0.32s; }
+  .loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+  @keyframes vaultPulse {
+    0%, 100% {
+      transform: scale(1);
+      filter: drop-shadow(0 0 40px rgba(255, 215, 0, 0.5));
+    }
+    50% {
+      transform: scale(1.05);
+      filter: drop-shadow(0 0 60px rgba(255, 215, 0, 0.8));
+    }
+  }
+
+  @keyframes vaultRotate {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  @keyframes loadingDots {
+    0%, 80%, 100% {
+      transform: scale(0.8);
+      opacity: 0.5;
+    }
+    40% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
+  /* Ninja cards: shared shell, then one tinted variant per ninja */
+  .ninja-avatar-card {
+    @apply relative overflow-hidden rounded-2xl md:rounded-3xl p-4 md:p-6 cursor-pointer transition-all duration-500 transform;
+    background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%);
+    backdrop-filter: blur(15px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .ninja-avatar-card:hover {
+    @apply shadow-2xl;
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  }
+
+  .ninja-avatar-emerald {
+    @apply ninja-avatar-card border-2 border-ninja-emerald-500/30 hover:border-ninja-emerald-500/60 hover:shadow-ninja-emerald;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%);
+  }
+
+  .ninja-avatar-crimson {
+    @apply ninja-avatar-card border-2 border-ninja-crimson-500/30 hover:border-ninja-crimson-500/60 hover:shadow-ninja-crimson;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+  }
+
+  .ninja-avatar-azure {
+    @apply ninja-avatar-card border-2 border-ninja-azure-500/30 hover:border-ninja-azure-500/60 hover:shadow-ninja-azure;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+  }
+
+  .ninja-avatar-gold {
+    @apply ninja-avatar-card border-2 border-ninja-gold-500/30 hover:border-ninja-gold-500/60 hover:shadow-ninja-gold;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(245, 158, 11, 0.05) 100%);
+  }
+
+  /* Selected state: lift the card and tint the drop shadow to the ninja */
+  .ninja-selected {
+    transform: translateY(-4px) scale(1.05) !important;
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  .ninja-selected.ninja-avatar-emerald {
+    box-shadow: 0 25px 80px rgba(34, 197, 94, 0.4) !important;
+  }
+
+  .ninja-selected.ninja-avatar-crimson {
+    box-shadow: 0 25px 80px rgba(239, 68, 68, 0.4) !important;
+  }
+
+  .ninja-selected.ninja-avatar-azure {
+    box-shadow: 0 25px 80px rgba(59, 130, 246, 0.4) !important;
+  }
+
+  .ninja-selected.ninja-avatar-gold {
+    box-shadow: 0 25px 80px rgba(250, 204, 21, 0.4) !important;
+  }
+
+  /* Avatar art sits slightly above its card, with a per-ninja hover glow */
+  .ninja-avatar-container {
+    @apply relative flex items-center justify-center;
+    margin-top: -10px;
+    z-index: 10;
+  }
+
+  .ninja-character-avatar {
+    @apply w-24 h-24 md:w-40 md:h-40;
+    background: none;
+    border: none;
+    filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.3));
+  }
+
+  .ninja-glow-emerald:hover .ninja-character-avatar {
+    filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 30px rgba(34, 197, 94, 0.25));
+  }
+
+  .ninja-glow-crimson:hover .ninja-character-avatar {
+    filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 30px rgba(239, 68, 68, 0.25));
+  }
+
+  .ninja-glow-azure:hover .ninja-character-avatar {
+    filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 30px rgba(59, 130, 246, 0.25));
+  }
+
+  .ninja-glow-gold:hover .ninja-character-avatar {
+    filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 30px rgba(250, 204, 21, 0.25));
+  }
+
+  /* Desktop card sizing for the selection grid */
+  .ninja-avatar-mobile {
+    @apply p-4 md:p-8 text-center rounded-2xl md:rounded-3xl cursor-pointer transition-all duration-300 hover:scale-105;
+    background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+    backdrop-filter: blur(10px);
+    min-height: 200px;
+    padding-top: 1rem;
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (min-width: 768px) {
+    .ninja-avatar-mobile {
+      min-height: 340px;
+      padding-top: 2rem;
+    }
+  }
+
+  /* Reveal the "Enter Vault" affordance on hover */
+  .ninja-avatar-mobile:hover .opacity-0 {
+    opacity: 1 !important;
+  }
+
+  /* Mobile card variant for the same grid */
+  .mobile-card {
+    @apply bg-dark-card border border-dark-border rounded-2xl p-3 shadow-card;
+    backdrop-filter: blur(10px);
+  }
+
+  .mobile-ninja-grid {
+    @apply grid grid-cols-2 gap-4 p-4;
+  }
+
+  /* Applied as md:ninja-selection-mobile — takes over the grid above at desktop */
+  .ninja-selection-mobile {
+    @apply grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-6;
+  }
+
+  .mobile-ninja-card {
+    @apply mobile-card p-4 text-center hover:scale-105 transition-all duration-300 cursor-pointer border-2 border-dark-border;
+  }
+
+  .mobile-ninja-card.ninja-avatar-emerald {
+    @apply border-ninja-emerald-500/30;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%);
+  }
+
+  .mobile-ninja-card.ninja-avatar-crimson {
+    @apply border-ninja-crimson-500/30;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+  }
+
+  .mobile-ninja-card.ninja-avatar-azure {
+    @apply border-ninja-azure-500/30;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+  }
+
+  .mobile-ninja-card.ninja-avatar-gold {
+    @apply border-ninja-gold-500/30;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(245, 158, 11, 0.05) 100%);
+  }
+
+  .mobile-ninja-card.ninja-avatar-emerald:hover {
+    @apply border-ninja-emerald-500/60 shadow-ninja-emerald;
+  }
+
+  .mobile-ninja-card.ninja-avatar-crimson:hover {
+    @apply border-ninja-crimson-500/60 shadow-ninja-crimson;
+  }
+
+  .mobile-ninja-card.ninja-avatar-azure:hover {
+    @apply border-ninja-azure-500/60 shadow-ninja-azure;
+  }
+
+  .mobile-ninja-card.ninja-avatar-gold:hover {
+    @apply border-ninja-gold-500/60 shadow-ninja-gold;
+  }
+
+  .mobile-ninja-card:hover {
+    @apply border-primary-500/30 shadow-glow;
+  }
+
+  .mobile-ninja-avatar {
+    @apply w-16 h-16 mx-auto mb-3;
+  }
+
+  .mobile-ninja-title {
+    @apply text-xs font-bold text-primary-400 mb-1 whitespace-nowrap;
+  }
+
+  .mobile-ninja-name {
+    @apply text-sm font-medium text-dark-text mb-1;
+  }
+
+  .mobile-ninja-role {
+    @apply text-xs text-dark-muted;
+  }
+}

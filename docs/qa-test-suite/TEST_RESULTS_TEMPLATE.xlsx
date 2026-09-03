@@ -1,0 +1,33 @@
+# Test Results Tracking Spreadsheet
+
+This file should be created as an Excel spreadsheet with the following structure:
+
+## Sheet 1: Test Execution Summary
+| Test ID | Module | Test Scenario | Priority | Status | Execution Date | Tester | Pass/Fail | Defect ID | Notes |
+|---------|--------|---------------|----------|--------|----------------|---------|-----------|-----------|-------|
+| TC_AUTH_001 | Authentication | Ninja Selection Screen Load | Critical | Executed | 2026-07-15 | QA_Team | Pass | - | All elements loaded correctly |
+| TC_AUTH_002 | Authentication | Valid PIN Entry | Critical | Executed | 2026-07-15 | QA_Team | Fail | DEF_001 | Custom PIN not accepted |
+
+## Sheet 2: Defect Summary  
+| Defect ID | Severity | Module | Summary | Status | Found Date | Fixed Date | Retest Result |
+|-----------|----------|--------|---------|---------|------------|-------------|---------------|
+| DEF_001 | Major | Authentication | Custom PIN login fails | Open | 2026-07-15 | - | - |
+| DEF_002 | Minor | Dashboard | Color inconsistency | Fixed | 2026-07-15 | 2026-07-16 | Pass |
+
+## Sheet 3: Test Coverage Matrix
+| Module | Total Tests | Executed | Passed | Failed | Blocked | Coverage % |
+|--------|-------------|----------|--------|--------|---------|------------|
+| Authentication | 25 | 25 | 23 | 2 | 0 | 100% |
+| Dashboard | 25 | 20 | 20 | 0 | 5 | 80% |
+
+## Sheet 4: API Test Results
+| Test ID | Endpoint | Method | Expected Status | Actual Status | Response Time | Pass/Fail |
+|---------|----------|--------|-----------------|---------------|---------------|-----------|
+| TC_CONT_002_API | /rest/v1/contributions | POST | 201 | 201 | 145ms | Pass |
+
+## Sheet 5: Database Verification
+| Test ID | Query | Expected Result | Actual Result | Pass/Fail |
+|---------|--------|-----------------|---------------|-----------|
+| TC_CONT_002 | SELECT COUNT(*) FROM contributions WHERE member_id=1 | 1 | 1 | Pass |
+
+Note: Create this as an actual Excel file for real test execution tracking.
