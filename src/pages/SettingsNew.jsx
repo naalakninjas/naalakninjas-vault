@@ -112,15 +112,18 @@ const PinChangeModal = ({ isOpen, onClose, onSubmit, currentNinja }) => {
     confirm: false
   })
   const [errors, setErrors] = useState({})
+  const [saving, setSaving] = useState(false)
 
   const validatePin = () => {
     const newErrors = {}
     
-    if (!pinForm.currentPin) {
-      newErrors.currentPin = 'Current PIN is required'
+    // Shape only. Whether the current PIN is actually right is decided by the
+    // database, which is the only place the hash exists.
+    if (!/^\d{4}$/.test(pinForm.currentPin)) {
+      newErrors.currentPin = 'Enter your current 4-digit PIN'
     }
     
-    if (!pinForm.newPin || pinForm.newPin.length !== 4) {
+    if (!/^\d{4}$/.test(pinForm.newPin)) {
       newErrors.newPin = 'New PIN must be 4 digits'
     }
     
@@ -132,13 +135,23 @@ const PinChangeModal = ({ isOpen, onClose, onSubmit, currentNinja }) => {
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSubmit = () => {
-    if (validatePin()) {
-      onSubmit(pinForm)
-      onClose()
-      setPinForm({ currentPin: '', newPin: '', confirmPin: '' })
-      setErrors({})
+  const handleSubmit = async () => {
+    if (!validatePin()) return
+
+    setSaving(true)
+    const result = await onSubmit(pinForm)
+    setSaving(false)
+
+    // Held open when the server refuses, because the reason is nearly always a
+    // wrong current PIN and closing would throw that away along with the form.
+    if (!result?.success) {
+      setErrors({ currentPin: result?.error || 'Could not update your PIN.' })
+      return
     }
+
+    onClose()
+    setPinForm({ currentPin: '', newPin: '', confirmPin: '' })
+    setErrors({})
   }
 
   return (
@@ -173,10 +186,20 @@ const PinChangeModal = ({ isOpen, onClose, onSubmit, currentNinja }) => {
         />
         
         <div className="flex gap-3 pt-4">
-          <Button variant="primary" onClick={handleSubmit} className="flex-1">
+          <Button
+            variant="primary"
+            onClick={handleSubmit}
+            loading={saving}
+            className="flex-1"
+          >
             Update PIN
           </Button>
-          <Button variant="outline" onClick={onClose} className="flex-1">
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1"
+          >
             Cancel
           </Button>
         </div>
@@ -371,14 +394,19 @@ const SettingsPage = () => {
     }
   }
 
-  const handlePinChange = (pinForm) => {
-    try {
-      updateNinjaPin(currentNinja.id, pinForm.newPin)
-      showSuccess('PIN changed successfully!')
-    } catch (error) {
-      console.error('Error changing PIN:', error)
-      showError('Failed to change PIN')
-    }
+  // Returns the result so the modal can stay open and show why a change was
+  // refused — the current PIN is checked in Postgres, not here.
+  const handlePinChange = async (pinForm) => {
+    const result = await updateNinjaPin(
+      currentNinja.id,
+      pinForm.newPin,
+      pinForm.currentPin
+    )
+
+    if (result.success) showSuccess('PIN changed successfully!')
+    else showError(result.error)
+
+    return result
   }
 
   if (loading) {

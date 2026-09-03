@@ -19,6 +19,38 @@ export const formatMoneyCompact = (value) => {
   return `₹${amount}`
 }
 
+const MINUTE = 60 * 1000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+/**
+ * How long ago, in the shortest form that is still unambiguous. Switches to a
+ * plain date after a week, where "eleven days ago" has stopped being easier to
+ * read than the date itself.
+ */
+export const formatRelative = (value) => {
+  const then = new Date(value)
+  if (Number.isNaN(then.getTime())) return ''
+
+  const elapsed = Date.now() - then.getTime()
+
+  if (elapsed < 0) return 'just now'
+  if (elapsed < MINUTE) return 'just now'
+  if (elapsed < HOUR) return `${Math.floor(elapsed / MINUTE)}m ago`
+  if (elapsed < DAY) return `${Math.floor(elapsed / HOUR)}h ago`
+  if (elapsed < 7 * DAY) return `${Math.floor(elapsed / DAY)}d ago`
+
+  return then.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+/** Date and time together, for the exact moment behind a relative label. */
+export const formatDateTime = (value) => {
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return ''
+
+  return at.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 /** Clamp a ratio to a 0-100 percentage. */
 export const toPercent = (value, total) => {
   const denominator = Number(total) || 0

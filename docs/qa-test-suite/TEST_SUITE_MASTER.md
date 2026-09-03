@@ -36,10 +36,11 @@ INSERT INTO members (id, name, color) VALUES
 
 ```
 
-> **PINs**: there are no default PINs any more. On a fresh browser each ninja
-> is prompted to choose one, so tests should set a PIN as their first step
-> rather than expecting a known value. Clearing `localStorage` returns any
-> ninja to first-run setup.
+> **PINs**: there are no default PINs any more. A ninja with no PIN is prompted
+> to choose one, so tests should set a PIN as their first step rather than
+> expecting a known value. PINs are bcrypt hashes in `members.pin_hash`, so
+> they survive clearing `localStorage` and apply on every device. Use
+> `UPDATE members SET pin_hash = NULL;` to return the squad to first-run setup.
 
 ## Test Execution Guidelines
 1. **Reset database** before each test run

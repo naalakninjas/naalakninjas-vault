@@ -12,11 +12,60 @@ export const dbService = {
   async getMembers() {
     const { data, error } = await supabase
       .from('members')
-      .select('*')
+      // Columns are named rather than starred: anon has no privilege on
+      // members.pin_hash, and `select('*')` would ask for it and be refused.
+      .select('id, name, color, created_at')
       .order('id')
     
     if (error) throw error
     return data
+  },
+
+  // PINs
+  //
+  // PINs are verified in Postgres, not in the browser. They used to live in
+  // localStorage, which made them per-device: a ninja who set a PIN on their
+  // phone still saw first-run setup on everyone else's device. See the PIN
+  // handling block in db/schema.sql.
+
+  /**
+   * Which ninjas have finished first-run setup, as `{ [memberId]: boolean }`.
+   * Returns booleans only — the hashes never leave the database.
+   */
+  async getPinStatus() {
+    const { data, error } = await supabase.rpc('member_pin_status')
+
+    if (error) throw error
+
+    return (data || []).reduce((status, row) => {
+      status[row.member_id] = row.has_pin
+      return status
+    }, {})
+  },
+
+  async verifyPin(memberId, pin) {
+    const { data, error } = await supabase.rpc('verify_member_pin', {
+      p_member_id: memberId,
+      p_pin: pin
+    })
+
+    if (error) throw error
+    return data === true
+  },
+
+  /**
+   * Sets a first PIN when `currentPin` is null, otherwise changes an existing
+   * one. The database rejects a change whose current PIN does not match, so
+   * callers must surface the error rather than assume success.
+   */
+  async setPin(memberId, newPin, currentPin = null) {
+    const { error } = await supabase.rpc('set_member_pin', {
+      p_member_id: memberId,
+      p_new_pin: newPin,
+      p_current_pin: currentPin
+    })
+
+    if (error) throw error
   },
 
   // Contributions
@@ -109,6 +158,22 @@ export const dbService = {
     return data[0]
   },
 
+  /**
+   * Withdraws a request. Votes cast on it go too, by ON DELETE CASCADE.
+   *
+   * Only 'pending' and 'rejected' requests can be removed: a BEFORE DELETE
+   * trigger refuses the rest, since an approved request has already moved
+   * money and its repayments would cascade away with it.
+   */
+  async deleteMission(id) {
+    const { error } = await supabase
+      .from('missions')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
   // Votes
   async getVotesForMission(missionId) {
     const { data, error } = await supabase
@@ -173,6 +238,44 @@ export const dbService = {
 
     if (error) throw error
     return data
+  },
+
+  // Vault status
+  /**
+   * Recent sign-in attempts, newest first, successes and failures alike.
+   * Written by verify_member_pin(); the browser only reads them.
+   */
+  async getLoginEvents(limit = 40) {
+    const { data, error } = await supabase
+      .from('login_events')
+      .select(`
+        *,
+        members(name, color)
+      `)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+    return data ?? []
+  },
+
+  /**
+   * Keep-alive cron runs within the last `days`, oldest first so the calendar
+   * can walk them in order. One run a day is expected; a day with none means
+   * the job did not fire.
+   */
+  async getKeepAliveRuns(days = 120) {
+    const since = new Date()
+    since.setDate(since.getDate() - days)
+
+    const { data, error } = await supabase
+      .from('keep_alive_runs')
+      .select('*')
+      .gte('ran_at', since.toISOString())
+      .order('ran_at', { ascending: true })
+
+    if (error) throw error
+    return data ?? []
   },
 
   // Settings

@@ -34,8 +34,9 @@ INSERT INTO members (id, name, color) VALUES
 ### 2. Test Data Configuration
 ```javascript
 // PINs are chosen at first sign-in, not shipped as defaults. Pick any four
-// digits per ninja at the start of a run and reuse them for that run; a
-// cleared localStorage sends every ninja back to first-run setup.
+// digits per ninja at the start of a run and reuse them for that run. They are
+// stored (hashed) in the database, so clearing localStorage does not reset
+// them — run `UPDATE members SET pin_hash = NULL;` for that.
 const TEST_PINS = {
   'Shilpha': '<choose at setup>',
   'Suhas': '<choose at setup>',

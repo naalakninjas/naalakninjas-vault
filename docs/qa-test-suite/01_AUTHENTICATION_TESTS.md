@@ -32,8 +32,8 @@
 **Module**: Authentication  
 **Test Scenario**: Login with the correct PIN  
 **Priority**: Critical  
-**Preconditions**: Shilpha has already completed first-run PIN setup on this
-browser (see TC_AUTH_002a), and the chosen PIN is known to the tester  
+**Preconditions**: Shilpha has already completed first-run PIN setup (see
+TC_AUTH_002a), and the chosen PIN is known to the tester  
 **Test Steps**:
 1. Click on "Shilpha" ninja card
 2. PIN input dialog appears
@@ -231,24 +231,23 @@ browser (see TC_AUTH_002a), and the chosen PIN is known to the tester
 
 ---
 
-## TC_AUTH_010 - Custom PIN After Change
+## TC_AUTH_010 - New PIN After A Change
 **Module**: Authentication  
-**Test Scenario**: Login with custom PIN after changing default  
+**Test Scenario**: Login with the new PIN, and confirm the old one stops working  
 **Priority**: High  
-**Preconditions**: PIN has been changed from default to custom PIN  
+**Preconditions**: PIN has been changed from Settings  
 **Test Steps**:
 1. Logout from authenticated session
-2. Select same ninja
-3. Enter custom PIN (not default)
-4. Verify successful login
+2. Select the same ninja
+3. Enter the previous PIN
+4. Enter the new PIN
 
 **Expected UI**:
-- Custom PIN accepted for login
-- No "Default PIN" hint shown
-- Successful authentication and navigation
+- The previous PIN is rejected with "Invalid PIN. Please try again."
+- The new PIN is accepted and navigates to the Dashboard
 
-**Expected API**: No API call for PIN verification  
-**Expected DB**: No changes (PIN stored in localStorage)  
+**Expected API**: `verify_member_pin` per attempt, returning false then true  
+**Expected DB**: No changes  
 **Pass/Fail**: ___  
 **Actual Result**: ___  
 **Screenshots**: ___  

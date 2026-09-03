@@ -77,16 +77,29 @@ npm run preview  # serve the production build locally
 | Sudeep | Azure `#3B82F6` |
 | Aneesh | Gold `#F59E0B` |
 
-There are **no default PINs**. The first time a ninja is picked on a device the
-sign-in screen asks them to choose a 4-digit PIN and confirm it; after that the
-same screen asks them to enter it. A PIN can be changed later from Settings.
+There are **no default PINs**. The first time a ninja is picked the sign-in
+screen asks them to choose a 4-digit PIN and confirm it; after that the same
+screen asks them to enter it. A PIN can be changed later from Settings, which
+requires the current one.
 
-PINs live in `localStorage`, so they are per-device: the same ninja on a new
-browser is asked to set one up again. Nothing recovers a forgotten PIN — clear
-the site's `localStorage` and it reverts to first-run setup.
+PINs are stored as bcrypt hashes in `members.pin_hash` and verified by
+`verify_member_pin()` in the database, so one PIN follows a ninja to every
+device and phone. The hash is never sent to the browser: the `anon` role has no
+column privilege to read it, and `db/schema.sql` narrows the grant on `members`
+to do that — which is why `dbService.getMembers()` names its columns instead of
+selecting `*`.
+
+Two consequences worth knowing. **Whoever sets a PIN first claims that ninja**,
+since a first PIN needs nothing to prove against; tell the squad to set theirs
+before sharing the URL. And **nothing recovers a forgotten PIN** — clear it with
+`UPDATE members SET pin_hash = NULL WHERE name = '...'` in the Supabase SQL
+editor, which returns that ninja to first-run setup.
 
 Earlier versions shipped a starting PIN per ninja, which meant the values sat
-in the source and therefore in the deployed bundle. See
+in the source and therefore in the deployed bundle. A later version fixed that
+but kept PINs in `localStorage`, which made them per-device: a ninja who had set
+one on their phone was still offered first-run setup on a teammate's browser,
+and that browser could set a different PIN for them. See
 [Known limitations](#known-limitations) for what the PIN does and does not
 protect.
 
@@ -208,9 +221,10 @@ To take the app through a full cycle with no leftover data:
    missions, votes, repayments and activity, and keeps the four members and
    your settings. Its first query prints what's about to be deleted, so you can
    run that part alone first if you want to look before you leap.
-2. Clear your browser's `localStorage` for the site to drop the saved session
-   and any changed PINs, so you start from the sign-in screen with the starting
-   PINs.
+2. Clear your browser's `localStorage` for the site to drop the saved session,
+   so you start from the sign-in screen. PINs live in the database now, so add
+   `UPDATE members SET pin_hash = NULL;` to the reset if you want first-run
+   setup back as well.
 3. Reload the app. The dashboard should read ₹0 with an empty activity feed.
 
 A reasonable path through the features: sign in, add a contribution for each
@@ -227,15 +241,17 @@ will refuse every amount.
 ## Known limitations
 
 **There is no real authentication.** Every browser talks to Supabase with the
-same public anon key, and identity is a 4-digit PIN in `localStorage`. So:
+same public anon key, and identity is a 4-digit PIN. So:
 
 - The PIN gates the UI, not the data. Anyone who can reach the project's API
   can read and write it directly.
-- Row Level Security is enabled but the policies are permissive by design.
-  Postgres has no way to tell one ninja from another, so ownership rules are
-  enforced by triggers and the UI instead. `db/schema.sql` explains this in
-  full and documents why an earlier attempt at strict policies broke the app.
-- PINs are per-device, because they're stored in the browser.
+- Row Level Security is enabled but the policies are permissive by design. A
+  PIN check produces no database session, so Postgres still has no way to tell
+  one ninja from another on the next request, and ownership rules are enforced
+  by triggers and the UI instead. `db/schema.sql` explains this in full and
+  documents why an earlier attempt at strict policies broke the app.
+- Four digits is a 10,000-value space, so anyone holding the anon key can grind
+  `verify_member_pin()`. bcrypt makes that slow rather than impossible.
 
 This is an acceptable trade for four friends sharing a private URL. It is not
 acceptable for anything wider. Fixing it properly means adopting Supabase Auth

@@ -338,15 +338,15 @@
 
 ---
 
-## TC_PIN_014 - Cleared Storage Returns to First-Run Setup
+## TC_PIN_014 - First-Run Setup For An Unclaimed Ninja
 **Module**: PIN Management  
-**Test Scenario**: A ninja with no stored PIN is asked to choose one  
+**Test Scenario**: A ninja whose PIN has never been set is asked to choose one  
 **Priority**: Medium  
-**Preconditions**: Ninja has a PIN set on this browser  
+**Preconditions**: `SELECT pin_hash FROM members WHERE name = '<name>'` is NULL.
+Run `UPDATE members SET pin_hash = NULL WHERE name = '<name>'` to get there  
 **Test Steps**:
 1. Sign out
-2. Clear the site's `localStorage` (or open a fresh private window)
-3. Select the same ninja
+2. Select that ninja
 
 **Expected UI**:
 - Heading reads "Welcome, <name>" rather than "Welcome back"
@@ -356,10 +356,38 @@
 - A matching confirmation signs straight in to the Dashboard
 - No PIN value is displayed at any point
 
-**Expected API**: No API call  
+**Expected API**: `member_pin_status` on selecting the ninja, then
+`set_member_pin` and `verify_member_pin` on a matching confirmation  
+**Expected DB**: `members.pin_hash` and `pin_set_at` populated for that member;
+an `activity` row reading "<name> set their PIN"  
+**LocalStorage**: `currentNinja` only. No PIN is ever written to the browser  
+**Pass/Fail**: ___  
+**Actual Result**: ___  
+**Screenshots**: ___  
+**Defect ID**: ___
+
+---
+
+## TC_PIN_014a - A PIN Works On Every Device
+**Module**: PIN Management  
+**Test Scenario**: A PIN set on one device is required on all others  
+**Priority**: Critical  
+**Preconditions**: Shilpha has completed first-run setup on device A  
+**Test Steps**:
+1. On a second device or a fresh private window, open the app
+2. Select Shilpha
+3. Enter a wrong PIN, then the PIN set on device A
+
+**Expected UI**:
+- Heading reads "Welcome back, Shilpha" — **not** "Choose a 4-digit PIN". This
+  is the regression this test exists for: PINs were once per-browser, so a
+  second device offered setup and could claim a ninja who already had a PIN
+- The wrong PIN is rejected with "Invalid PIN. Please try again."
+- The PIN from device A signs in
+
+**Expected API**: `member_pin_status` returns `has_pin: true` for Shilpha  
 **Expected DB**: No changes  
-**LocalStorage**: `ninjaPins` gains an entry for this ninja only on a
-successful confirmation  
+**LocalStorage**: `currentNinja` only  
 **Pass/Fail**: ___  
 **Actual Result**: ___  
 **Screenshots**: ___  
@@ -505,14 +533,18 @@ successful confirmation
 **Preconditions**: PIN change functionality available  
 **Test Steps**:
 1. Inspect browser dev tools during PIN entry
-2. Check network requests for PIN exposure
-3. Verify localStorage encryption/obfuscation
-4. Test for PIN leakage in browser history
+2. Check that no response body carries a PIN or a hash
+3. Confirm no PIN is written to `localStorage`
+4. Query `members` with the anon key selecting `pin_hash`
+5. Test for PIN leakage in browser history
 
 **Expected UI**: No visual changes  
-**Expected API**: No PIN data in network requests  
-**Expected DB**: No PIN data stored in database  
-**LocalStorage**: PIN data properly secured  
+**Expected API**: The PIN appears only in the request body of
+`verify_member_pin`/`set_member_pin`, never in a response. A select of
+`pin_hash` with the anon key is refused with a permission error  
+**Expected DB**: `pin_hash` holds a bcrypt hash (a `$2a$`-prefixed string),
+never the digits  
+**LocalStorage**: No PIN and no hash. Only `currentNinja`  
 **Pass/Fail**: ___  
 **Actual Result**: ___  
 **Screenshots**: ___  

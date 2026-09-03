@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, LifeBuoy, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { Plus, LifeBuoy, ThumbsUp, ThumbsDown, Trash2 } from 'lucide-react'
 import { useAuth, ninjas } from '../contexts/AuthContext'
 import { dbService } from '../services/supabase'
 import { 
@@ -22,11 +22,15 @@ import { formatMoney } from '../utils/format'
 import MissionForm from '../components/MissionForm'
 import RepaymentForm from '../components/RepaymentForm'
 
-const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, currentNinja, userVotes = [] }) => {
+const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, currentNinja, userVotes = [] }) => {
   const ninja = mission.member_name
   const ninjaRecord = getNinjaByName(ninja, ninjas)
   const isOwnMission = mission.member_id === currentNinja.id
   const hasVoted = userVotes.some(vote => vote.mission_id === mission.id && vote.member_id === currentNinja.id)
+  // Only the requester can withdraw their own request, and only while nothing
+  // has moved: an approved or repaid one is already part of the balance, and
+  // the database refuses to delete it.
+  const canDelete = isOwnMission && ['pending', 'rejected'].includes(mission.status)
   
   const getStatusColor = () => {
     switch (mission.status) {
@@ -63,9 +67,22 @@ const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, currentNinja
               </div>
             </div>
           </div>
-          <Badge variant={getStatusColor()}>
-            {mission.status}
-          </Badge>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Badge variant={getStatusColor()}>
+              {mission.status}
+            </Badge>
+            {canDelete && (
+              <span onClick={(e) => e.stopPropagation()}>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon={Trash2}
+                  aria-label="Withdraw request"
+                  onClick={() => onDelete(mission)}
+                />
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Amount */}
@@ -308,6 +325,7 @@ const MissionsPage = () => {
   const [selectedRepaymentMission, setSelectedRepaymentMission] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [pendingVote, setPendingVote] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   useEffect(() => {
     loadMissions()
@@ -394,6 +412,20 @@ const MissionsPage = () => {
   const handleViewDetails = (mission) => {
     setSelectedMission(mission)
     setShowDetails(true)
+  }
+
+  const handleDeleteMission = async () => {
+    const target = deleteTarget
+    if (!target?.id) return
+
+    try {
+      await dbService.deleteMission(target.id)
+      await loadMissions()
+      showSuccess('Request withdrawn')
+    } catch (error) {
+      console.error('Error deleting mission:', error)
+      showError(`Failed to withdraw request: ${error.message}`)
+    }
   }
 
   const handleRepaymentClick = (mission) => {
@@ -496,6 +528,7 @@ const MissionsPage = () => {
                     onVote={requestVote}
                     onViewDetails={handleViewDetails}
                     onRepayment={handleRepaymentClick}
+                    onDelete={setDeleteTarget}
                     currentNinja={currentNinja}
                     userVotes={userVotes}
                   />
@@ -564,6 +597,25 @@ const MissionsPage = () => {
         }
         details="You cannot change your vote afterwards."
         confirmLabel={pendingVote?.voteType === 'approve' ? 'Approve' : 'Reject'}
+      />
+
+      {/* Withdrawing takes any votes already cast with it, so say so */}
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteMission}
+        title="Withdraw this request?"
+        message={
+          deleteTarget
+            ? `Your ${formatMoney(deleteTarget.amount)} request will be removed from the council.`
+            : ''
+        }
+        details={
+          (deleteTarget?.approval_count || 0) + (deleteTarget?.rejection_count || 0) > 0
+            ? 'This cannot be undone, and the votes cast on it will be deleted too.'
+            : 'This cannot be undone.'
+        }
+        confirmLabel="Withdraw"
       />
     </PageContainer>
   )

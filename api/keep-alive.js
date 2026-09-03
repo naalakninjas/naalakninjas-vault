@@ -20,6 +20,36 @@
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
+/**
+ * Leaves a trace of the run in `keep_alive_runs`, which is what the Vault
+ * Status calendar in the app reads. Vercel's own logs are the other record,
+ * but they are not visible from a phone.
+ *
+ * Never allowed to fail the request: the ping is the job, and losing the
+ * bookkeeping is not a reason to report the ping as broken. It also counts as
+ * a second write against the database, which only helps keep it awake.
+ */
+const recordRun = async (ok, detail) => {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/keep_alive_runs`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal'
+      },
+      body: JSON.stringify({ ok, detail })
+    })
+
+    if (!response.ok) {
+      console.error('Could not record the run:', response.status, await response.text())
+    }
+  } catch (error) {
+    console.error('Could not record the run:', error.message)
+  }
+}
+
 export default async function handler(request, response) {
   // Cron paths are ordinary public URLs. Vercel sends CRON_SECRET as a bearer
   // token on its own invocations; without the secret configured there is no
@@ -50,20 +80,24 @@ export default async function handler(request, response) {
     })
 
     if (!result.ok) {
-      // Surfaced in the Vercel function logs, which is the only place a failed
-      // cron run is visible: a paused project would start failing here first.
+      // Surfaced in the Vercel function logs and in the app's Vault Status
+      // calendar: a paused project would start failing here first.
       const detail = await result.text()
       console.error('Keep-alive query failed:', result.status, detail)
+      await recordRun(false, `Query failed with ${result.status}`)
 
       return response.status(502).json({ ok: false, status: result.status })
     }
 
     // The rows themselves are not echoed back; reaching Postgres is the point.
     await result.json()
+    await recordRun(true, null)
 
     return response.status(200).json({ ok: true, pingedAt: new Date().toISOString() })
   } catch (error) {
     console.error('Keep-alive request threw:', error.message)
+    await recordRun(false, `Supabase unreachable: ${error.message}`)
+
     return response.status(502).json({ ok: false, error: 'Supabase unreachable' })
   }
 }

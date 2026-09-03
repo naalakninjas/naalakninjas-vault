@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { Shield, ArrowLeft } from 'lucide-react'
 import { getNinjaAccent } from '../utils/ninjaHelpers'
+import { showError } from '../utils/toast'
 
 const NinjaSelection = () => {
-  const { ninjas, login, updateNinjaPin, hasPin } = useAuth()
+  const { ninjas, login, updateNinjaPin, checkHasPin } = useAuth()
   const navigate = useNavigate()
   const pinInputRef = useRef(null)
   const [selectedNinja, setSelectedNinja] = useState(null)
@@ -20,6 +21,11 @@ const NinjaSelection = () => {
   // Null means this ninja already has a PIN and we are verifying instead.
   const [setupStage, setSetupStage] = useState(null)
   const [chosenPin, setChosenPin] = useState('')
+  // Which tile is waiting on its PIN-status lookup, and whether a PIN is
+  // currently in flight. Both exist to keep a slow network from looking like
+  // an unresponsive screen, and to block a second submit landing mid-request.
+  const [checkingNinjaId, setCheckingNinjaId] = useState(null)
+  const [verifying, setVerifying] = useState(false)
 
   // Loading sequence effect
   useEffect(() => {
@@ -83,15 +89,34 @@ const NinjaSelection = () => {
     }
   }
 
-  const handleNinjaSelect = (ninja) => {
-    setSelectedNinja(ninja)
-    setShowPinInput(true)
-    setPinError('')
-    setPin('')
-    setAttempts(0)
-    // A ninja with no PIN on this device picks one now instead of signing in.
-    setSetupStage(hasPin(ninja.id) ? null : 'choose')
-    setChosenPin('')
+  /**
+   * Which screen a ninja gets depends on whether anyone has set their PIN yet,
+   * and that answer lives in the database — so this waits for it rather than
+   * showing a guess. Failing to reach the vault keeps us on the selection
+   * screen: dropping into setup here would invite someone to choose a PIN that
+   * could not be saved, or worse, replace one that already exists.
+   */
+  const handleNinjaSelect = async (ninja) => {
+    if (checkingNinjaId) return
+
+    setCheckingNinjaId(ninja.id)
+
+    try {
+      const claimed = await checkHasPin(ninja.id)
+
+      setSelectedNinja(ninja)
+      setShowPinInput(true)
+      setPinError('')
+      setPin('')
+      setAttempts(0)
+      setSetupStage(claimed ? null : 'choose')
+      setChosenPin('')
+    } catch (error) {
+      console.error('Could not check PIN status:', error.message)
+      showError('Could not reach the vault. Check your connection and try again.')
+    } finally {
+      setCheckingNinjaId(null)
+    }
   }
 
   const handleBackToSelection = () => {
@@ -113,8 +138,10 @@ const NinjaSelection = () => {
     setTimeout(() => navigate('/dashboard'), 1200)
   }
 
-  const attemptLogin = (candidate) => {
-    const loginResult = login(selectedNinja, candidate)
+  const attemptLogin = async (candidate) => {
+    setVerifying(true)
+    const loginResult = await login(selectedNinja, candidate)
+    setVerifying(false)
 
     if (loginResult.success) {
       enterVault()
@@ -139,7 +166,7 @@ const NinjaSelection = () => {
    * depending on where we are: the first half of a new PIN, the confirmation
    * of it, or a sign-in attempt.
    */
-  const submitPin = (digits) => {
+  const submitPin = async (digits) => {
     if (setupStage === 'choose') {
       setChosenPin(digits)
       setPin('')
@@ -158,9 +185,22 @@ const NinjaSelection = () => {
         return
       }
 
-      updateNinjaPin(selectedNinja.id, digits)
+      setVerifying(true)
+      const saved = await updateNinjaPin(selectedNinja.id, digits)
+
+      if (!saved.success) {
+        // Stay in setup so the PIN can be re-entered once the reason is fixed.
+        setVerifying(false)
+        setPin('')
+        setChosenPin('')
+        setSetupStage('choose')
+        setPinError(saved.error)
+        return
+      }
+
       // Go through login so the session is stored in exactly one place.
-      const result = login(selectedNinja, digits)
+      const result = await login(selectedNinja, digits)
+      setVerifying(false)
 
       if (result.success) enterVault()
       else setPinError(result.error)
@@ -168,7 +208,7 @@ const NinjaSelection = () => {
       return
     }
 
-    attemptLogin(digits)
+    await attemptLogin(digits)
   }
 
   // A PIN is always four digits, so the fourth keystroke submits itself —
@@ -177,9 +217,10 @@ const NinjaSelection = () => {
   // start over. There, the button is the way forward.
   //
   // Bails once locked out: typing would otherwise clear the lockout message
-  // and land another guess before the screen resets.
+  // and land another guess before the screen resets. Also bails while a check
+  // is in flight, so a fast typist cannot queue a second attempt.
   const handlePinChange = (e) => {
-    if (isEntering || lockedOut) return
+    if (isEntering || lockedOut || verifying) return
 
     const digits = e.target.value.replace(/\D/g, '').slice(0, 4)
     setPin(digits)
@@ -193,7 +234,7 @@ const NinjaSelection = () => {
   const handlePinSubmit = (e) => {
     e.preventDefault()
 
-    if (pin.length === 4 && !isEntering && !lockedOut) {
+    if (pin.length === 4 && !isEntering && !lockedOut && !verifying) {
       submitPin(pin)
     }
   }
@@ -245,7 +286,7 @@ const NinjaSelection = () => {
                 value={pin}
                 onChange={handlePinChange}
                 maxLength={4}
-                disabled={isEntering || lockedOut}
+                disabled={isEntering || lockedOut || verifying}
                 aria-invalid={Boolean(pinError)}
                 aria-describedby={pinError ? 'pin-error' : undefined}
                 className="absolute inset-0 h-full w-full opacity-0"
@@ -295,7 +336,7 @@ const NinjaSelection = () => {
               </p>
             ) : setupStage === 'choose' ? (
               <p className="mt-3 text-center text-xs text-faint">
-                Only you will know this. It is stored on this device.
+                Only you will know this. It works on every device.
               </p>
             ) : (
               // Nothing to say while confirming or signing in: the heading
@@ -305,10 +346,16 @@ const NinjaSelection = () => {
 
             <button
               type="submit"
-              disabled={pin.length !== 4 || isEntering || lockedOut}
+              disabled={pin.length !== 4 || isEntering || lockedOut || verifying}
               className={`${getNinjaButtonClass(selectedNinja)} mt-5 w-full`}
             >
-              {setupStage === 'choose' ? 'Continue' : setupStage === 'confirm' ? 'Set PIN & Enter' : 'Enter Vault'}
+              {verifying
+                ? 'Checking...'
+                : setupStage === 'choose'
+                  ? 'Continue'
+                  : setupStage === 'confirm'
+                    ? 'Set PIN & Enter'
+                    : 'Enter Vault'}
             </button>
           </form>
         </div>
@@ -432,7 +479,7 @@ const NinjaSelection = () => {
                   {ninja.name}
                 </div>
                 <div className="mobile-ninja-role">
-                  {getNinjaRole(ninja)}
+                  {checkingNinjaId === ninja.id ? 'Checking...' : getNinjaRole(ninja)}
                 </div>
                 
                 {/* Selection Indicator */}
@@ -480,7 +527,11 @@ const NinjaSelection = () => {
                     </p>
                   </div>
                   
-                  {selectedNinja?.id === ninja.id ? (
+                  {checkingNinjaId === ninja.id ? (
+                    <div className="mt-3 text-xs font-medium text-dark-muted">
+                      Checking...
+                    </div>
+                  ) : selectedNinja?.id === ninja.id ? (
                     <div className="mt-3 text-xs font-medium text-green-400">
                       ✓ Selected
                     </div>

@@ -17,6 +17,11 @@
 -- 1. TABLES
 -- ============================================================================
 
+-- Needed for crypt() and gen_salt(): login PINs are stored as bcrypt hashes,
+-- never in plaintext. Supabase ships pgcrypto in the `extensions` schema, so
+-- this is normally a no-op — it is here so a plain Postgres project works too.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- The squad. `id` is referenced by every other table and by the `ninjas`
 -- array in src/contexts/AuthContext.jsx, so these ids must stay stable.
 CREATE TABLE IF NOT EXISTS members (
@@ -87,6 +92,30 @@ CREATE TABLE IF NOT EXISTS activity (
     created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Every sign-in attempt, successful or not. Written by verify_member_pin()
+-- rather than by the browser, so the record cannot be skipped and a wrong PIN
+-- is visible too. Shown in the Vault Status panel.
+CREATE TABLE IF NOT EXISTS login_events (
+    id          SERIAL PRIMARY KEY,
+    member_id   INTEGER REFERENCES members(id) ON DELETE CASCADE,
+    succeeded   BOOLEAN NOT NULL,
+    user_agent  TEXT,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- One row per keep-alive cron run, written by api/keep-alive.js. The point of
+-- the cron job is to keep Supabase from pausing the project, and until now the
+-- only evidence it ran was in Vercel's logs; this puts it in the app.
+--
+-- Recording the run is itself a write, so it doubles as the activity that
+-- keeps the project awake.
+CREATE TABLE IF NOT EXISTS keep_alive_runs (
+    id      SERIAL PRIMARY KEY,
+    ran_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    ok      BOOLEAN NOT NULL,
+    detail  TEXT
+);
+
 -- Business rules, editable from the Settings page. Values are stored as text
 -- and cast where used, so a key can hold a number or a flag.
 CREATE TABLE IF NOT EXISTS vault_settings (
@@ -96,6 +125,17 @@ CREATE TABLE IF NOT EXISTS vault_settings (
     description  TEXT,
     created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Login PINs. These belong to the member, not to a browser: an earlier version
+-- kept them in each device's localStorage, which meant a ninja who had set a
+-- PIN on their phone was still offered first-run setup on everyone else's
+-- device — and that device could then set a different PIN for them.
+--
+-- `pin_hash` is bcrypt. The anon role has no column privilege to read it (see
+-- section 9) and every comparison happens inside the SECURITY DEFINER
+-- functions in section 4.
+ALTER TABLE members ADD COLUMN IF NOT EXISTS pin_hash   TEXT;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS pin_set_at TIMESTAMP WITH TIME ZONE;
 
 -- Older revisions of this schema shipped repayments without member_id and
 -- vault_settings without description. Backfill both for existing projects.
@@ -117,6 +157,8 @@ CREATE INDEX IF NOT EXISTS idx_missions_status           ON missions (status);
 CREATE INDEX IF NOT EXISTS idx_votes_mission             ON votes (mission_id);
 CREATE INDEX IF NOT EXISTS idx_repayments_mission        ON repayments (mission_id);
 CREATE INDEX IF NOT EXISTS idx_activity_created_at       ON activity (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_login_events_created_at   ON login_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_keep_alive_runs_ran_at    ON keep_alive_runs (ran_at DESC);
 
 
 -- ============================================================================
@@ -215,6 +257,121 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- ----------------------------------------------------------------------------
+-- PIN handling
+--
+-- All three run SECURITY DEFINER with a pinned search_path, and they are the
+-- only route to members.pin_hash: the anon role cannot select or update that
+-- column at all. So a caller can ask "is this PIN correct?" but cannot read
+-- the hash back out to attack it offline.
+--
+-- Keep the limit in view: four digits is a 10,000-value space, and anyone with
+-- the public anon key can still call verify_member_pin() in a loop. bcrypt
+-- makes that slow, not impossible. This is a gate that tells four friends
+-- apart, not authentication. Supabase Auth is the real fix — see the RLS note
+-- in section 8.
+-- ----------------------------------------------------------------------------
+
+-- Who has completed first-run setup. Safe to expose because it returns one
+-- boolean per member and never the hash. This is what lets every device agree
+-- on whether a ninja should be asked to choose a PIN or enter one.
+CREATE OR REPLACE FUNCTION member_pin_status()
+RETURNS TABLE (member_id INTEGER, has_pin BOOLEAN)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT id, pin_hash IS NOT NULL FROM members ORDER BY id;
+$$;
+
+-- A missing hash returns false rather than raising: "nobody has claimed this
+-- ninja yet" is a normal state, and the caller routes to setup instead.
+--
+-- Every attempt is recorded in login_events, successes and failures alike.
+-- Doing it here rather than in the browser means the record cannot be skipped,
+-- and it is the only place that knows whether the PIN was right.
+CREATE OR REPLACE FUNCTION verify_member_pin(p_member_id INTEGER, p_pin TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+    stored  TEXT;
+    matched BOOLEAN;
+    agent   TEXT;
+BEGIN
+    SELECT pin_hash INTO stored FROM members WHERE id = p_member_id;
+
+    matched := stored IS NOT NULL AND stored = crypt(p_pin, stored);
+
+    -- PostgREST exposes the request headers as a setting. Absent when the
+    -- function is called straight from SQL, and malformed if something else
+    -- has set it, so neither case is allowed to fail the sign-in.
+    BEGIN
+        agent := NULLIF(current_setting('request.headers', true), '')::json ->> 'user-agent';
+    EXCEPTION WHEN OTHERS THEN
+        agent := NULL;
+    END;
+
+    INSERT INTO login_events (member_id, succeeded, user_agent)
+    VALUES (p_member_id, matched, agent);
+
+    RETURN matched;
+END;
+$$;
+
+-- Sets or changes a PIN.
+--
+-- The first PIN needs no proof, because there is nothing yet to prove against.
+-- Every later change must present the current one, which is what stops a
+-- browser that is merely sitting on the Settings page from overwriting a PIN
+-- and taking the account over.
+CREATE OR REPLACE FUNCTION set_member_pin(
+    p_member_id   INTEGER,
+    p_new_pin     TEXT,
+    p_current_pin TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+    stored      TEXT;
+    member_name TEXT;
+BEGIN
+    IF p_new_pin IS NULL OR p_new_pin !~ '^[0-9]{4}$' THEN
+        RAISE EXCEPTION 'A PIN must be exactly four digits';
+    END IF;
+
+    SELECT pin_hash, name INTO stored, member_name
+    FROM members
+    WHERE id = p_member_id;
+
+    IF member_name IS NULL THEN
+        RAISE EXCEPTION 'No such member: %', p_member_id;
+    END IF;
+
+    IF stored IS NOT NULL
+       AND (p_current_pin IS NULL OR stored <> crypt(p_current_pin, stored)) THEN
+        RAISE EXCEPTION 'Current PIN is incorrect';
+    END IF;
+
+    UPDATE members
+    SET pin_hash   = crypt(p_new_pin, gen_salt('bf', 8)),
+        pin_set_at = NOW()
+    WHERE id = p_member_id;
+
+    PERFORM add_activity(
+        member_name || CASE WHEN stored IS NULL THEN ' set their PIN' ELSE ' changed their PIN' END,
+        p_member_id,
+        'pin_updated'
+    );
+END;
+$$;
+
+
 -- ============================================================================
 -- 5. VIEWS
 --
@@ -293,6 +450,40 @@ BEGIN
     );
 
     RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Withdrawing a request is only safe while no money has moved, so deletion is
+-- limited to 'pending' and 'rejected'.
+--
+-- An 'approved' or 'repaid' mission is part of get_vault_balance(), and
+-- repayments reference it with ON DELETE CASCADE: deleting one would take the
+-- repayment history with it and make the balance jump. That is enforced here
+-- rather than only in the UI, because every browser shares the same anon key.
+CREATE OR REPLACE FUNCTION guard_mission_deletion()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.status IN ('approved', 'repaid') THEN
+        RAISE EXCEPTION
+            'Cannot delete a request that was already %; the money has left the vault',
+            OLD.status;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION log_mission_deletion()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM add_activity(
+        (SELECT name FROM members WHERE id = OLD.member_id) ||
+            ' withdrew their ₹' || OLD.amount || ' request',
+        OLD.member_id,
+        'mission_deleted'
+    );
+
+    RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -493,6 +684,16 @@ CREATE TRIGGER trigger_log_mission_created
     AFTER INSERT ON missions
     FOR EACH ROW EXECUTE FUNCTION log_mission_created();
 
+DROP TRIGGER IF EXISTS trigger_guard_mission_deletion ON missions;
+CREATE TRIGGER trigger_guard_mission_deletion
+    BEFORE DELETE ON missions
+    FOR EACH ROW EXECUTE FUNCTION guard_mission_deletion();
+
+DROP TRIGGER IF EXISTS trigger_log_mission_deletion ON missions;
+CREATE TRIGGER trigger_log_mission_deletion
+    AFTER DELETE ON missions
+    FOR EACH ROW EXECUTE FUNCTION log_mission_deletion();
+
 DROP TRIGGER IF EXISTS trigger_prevent_self_vote ON votes;
 CREATE TRIGGER trigger_prevent_self_vote
     BEFORE INSERT OR UPDATE ON votes
@@ -566,9 +767,10 @@ DROP VIEW IF EXISTS v_current_month_status;
 -- IMPORTANT — read before changing:
 --
 -- The app has no server-side authentication. Every browser talks to Supabase
--- with the same public anon key, and "who am I" is a 4-digit PIN held in
--- localStorage. Postgres therefore cannot tell one ninja from another, and
--- RLS has no identity to filter on.
+-- with the same public anon key, and "who am I" is a 4-digit PIN checked by
+-- verify_member_pin(). That check is server-side and shared by all devices,
+-- but it still produces no database session: Postgres cannot tell one ninja
+-- from another on a later request, so RLS has no identity to filter on.
 --
 -- So these policies are permissive by design: they exist to keep RLS enabled
 -- (Supabase warns loudly otherwise) while leaving enforcement to the app and
@@ -592,6 +794,8 @@ ALTER TABLE votes          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE repayments     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vault_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE login_events    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE keep_alive_runs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow all operations on members" ON members;
 CREATE POLICY "Allow all operations on members" ON members
@@ -621,6 +825,24 @@ DROP POLICY IF EXISTS "Allow all operations on vault_settings" ON vault_settings
 CREATE POLICY "Allow all operations on vault_settings" ON vault_settings
     FOR ALL USING (true) WITH CHECK (true);
 
+-- Read-only from the browser. Rows are written by verify_member_pin(), which
+-- runs as the definer and is not subject to this policy, so there is no reason
+-- to let a client insert or edit its own sign-in history.
+DROP POLICY IF EXISTS "Read sign-in history" ON login_events;
+CREATE POLICY "Read sign-in history" ON login_events
+    FOR SELECT USING (true);
+
+-- Insert is allowed because api/keep-alive.js writes with the anon key, the
+-- same key the browser holds. A forged row is possible and not worth guarding
+-- against here; the calendar is a status display, not an audit.
+DROP POLICY IF EXISTS "Read keep-alive runs" ON keep_alive_runs;
+CREATE POLICY "Read keep-alive runs" ON keep_alive_runs
+    FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Record keep-alive runs" ON keep_alive_runs;
+CREATE POLICY "Record keep-alive runs" ON keep_alive_runs
+    FOR INSERT WITH CHECK (true);
+
 
 -- ============================================================================
 -- 9. GRANTS
@@ -636,6 +858,48 @@ GRANT EXECUTE ON FUNCTION get_vault_balance()                        TO anon;
 GRANT EXECUTE ON FUNCTION get_available_balance()                    TO anon;
 GRANT EXECUTE ON FUNCTION add_activity(TEXT, INTEGER, VARCHAR)       TO anon;
 
+GRANT EXECUTE ON FUNCTION member_pin_status()                        TO anon;
+GRANT EXECUTE ON FUNCTION verify_member_pin(INTEGER, TEXT)           TO anon;
+GRANT EXECUTE ON FUNCTION set_member_pin(INTEGER, TEXT, TEXT)        TO anon;
+
+-- members.pin_hash must stay unreadable from the browser, and the blanket
+-- table grant above would hand it over. RLS cannot help here: policies filter
+-- rows, not columns. Column-level grants are the mechanism, so the grant on
+-- `members` is narrowed to the columns the app actually displays.
+--
+-- Two consequences worth knowing before editing:
+--   * dbService.getMembers() must name its columns. `select('*')` expands to
+--     include pin_hash and Postgres refuses the whole query.
+--   * Nothing may write to `members` directly any more. set_member_pin() does
+--     it as SECURITY DEFINER, which is the point.
+--
+-- Applied to `authenticated` as well, since Supabase grants that role the same
+-- defaults and it would otherwise be a way around this.
+DO $$
+DECLARE
+    target TEXT;
+BEGIN
+    FOREACH target IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target) THEN
+            EXECUTE format('REVOKE ALL ON members FROM %I', target);
+            EXECUTE format(
+                'GRANT SELECT (id, name, color, created_at) ON members TO %I', target
+            );
+
+            -- Sign-in history is read-only to clients. The rows come from
+            -- verify_member_pin(), which runs as the definer and is not bound
+            -- by this grant, so nothing needs to insert here directly.
+            EXECUTE format('REVOKE ALL ON login_events FROM %I', target);
+            EXECUTE format('GRANT SELECT ON login_events TO %I', target);
+
+            -- Insert stays open for api/keep-alive.js, which writes with the
+            -- anon key. Nothing should ever edit or remove a past run.
+            EXECUTE format('REVOKE ALL ON keep_alive_runs FROM %I', target);
+            EXECUTE format('GRANT SELECT, INSERT ON keep_alive_runs TO %I', target);
+        END IF;
+    END LOOP;
+END $$;
+
 
 -- ============================================================================
 -- 10. VERIFY
@@ -643,6 +907,8 @@ GRANT EXECUTE ON FUNCTION add_activity(TEXT, INTEGER, VARCHAR)       TO anon;
 
 SELECT 'Schema applied.'                        AS status,
        (SELECT COUNT(*) FROM members)           AS members,
+       (SELECT COUNT(*) FROM members
+         WHERE pin_hash IS NOT NULL)            AS pins_set,
        (SELECT COUNT(*) FROM vault_settings)    AS settings,
        get_vault_balance()                      AS vault_balance,
        get_available_balance()                  AS available_balance;

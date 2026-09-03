@@ -1,4 +1,5 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
+import { dbService } from '../services/supabase'
 
 const AuthContext = createContext({})
 
@@ -14,31 +15,36 @@ export const ninjas = [
 ]
 
 /**
- * PINs are chosen by each ninja the first time they sign in on a device, and
- * live only in that browser's localStorage. There are deliberately no default
- * PINs: shipping a starting PIN meant the value sat in the source (and so in
- * the deployed bundle), where anyone could read it.
+ * PINs are chosen by each ninja on first sign-in and stored as bcrypt hashes
+ * in the database, so one PIN follows a ninja to every device.
  *
- * This is still client-side only. The app has no server session, so a PIN is a
- * "who am I on this device" switch, not access control — the data itself is
- * reachable through the project's API regardless. See the Known limitations
- * section of README.md.
+ * They used to live in each browser's localStorage, which quietly made a PIN
+ * mean "a PIN on this device": whoever opened the app somewhere new was
+ * offered first-run setup for all four ninjas, and could set a PIN for a
+ * teammate who already had one. Verification now happens in Postgres, through
+ * the SECURITY DEFINER functions in db/schema.sql, and the hash is never sent
+ * to the browser.
+ *
+ * This is still not authentication. Every browser holds the same public anon
+ * key, and a successful PIN check creates no database session, so the data
+ * remains reachable through the project's API regardless. A PIN says which
+ * ninja is using the app; it does not restrict what the app can read. See the
+ * Known limitations section of README.md.
  */
-const PIN_STORAGE_KEY = 'ninjaPins'
 
 /**
- * Reads the stored PIN map, tolerating a corrupted entry. These run during
- * render, so an unguarded JSON.parse here would blank the login screen rather
- * than fall back to asking for a new PIN.
+ * Turns a Postgres error into something worth showing on screen. The messages
+ * raised by set_member_pin() are matched on rather than passed through, so a
+ * connection failure cannot end up rendered as a PIN complaint.
  */
-const readPins = () => {
-  try {
-    return JSON.parse(localStorage.getItem(PIN_STORAGE_KEY) || '{}')
-  } catch (error) {
-    console.warn('Stored PINs were unreadable, clearing them:', error.message)
-    localStorage.removeItem(PIN_STORAGE_KEY)
-    return {}
-  }
+const describePinFailure = (error) => {
+  const message = error?.message || ''
+
+  if (message.includes('Current PIN is incorrect')) return 'That is not your current PIN.'
+  if (message.includes('four digits')) return 'A PIN must be exactly four digits.'
+
+  console.error('Saving the PIN failed:', message)
+  return 'Could not save your PIN. Check your connection and try again.'
 }
 
 /**
@@ -60,20 +66,62 @@ const restoreSession = () => {
 
 export const AuthProvider = ({ children }) => {
   const [currentNinja, setCurrentNinja] = useState(restoreSession)
+  const [pinStatus, setPinStatus] = useState(null)
+
+  // Warmed up front so the selection screen can show who still needs to set a
+  // PIN without a request per tap. `checkHasPin` re-reads before it matters.
+  useEffect(() => {
+    let active = true
+
+    // PINs used to be kept here in plaintext. Nothing reads the key any more,
+    // so clear it rather than leave a copy of everyone's PIN on the device.
+    localStorage.removeItem('ninjaPins')
+
+    dbService
+      .getPinStatus()
+      .then((status) => {
+        if (active) setPinStatus(status)
+      })
+      .catch((error) => {
+        console.warn('Could not load PIN status:', error.message)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   /**
-   * Signing in always requires a PIN that matches the stored one. The previous
-   * version skipped verification whenever `pin` was falsy, which let a caller
-   * in with no PIN at all.
+   * Whether a ninja has already claimed their PIN.
+   *
+   * Deliberately re-reads from the database instead of trusting the cached
+   * map: another device may have claimed the ninja since this tab loaded, and
+   * being wrong here would offer first-run setup for an account that already
+   * has an owner. Throws if the database is unreachable, because the caller
+   * must not guess which screen to show.
    */
-  const login = (ninja, pin) => {
-    const storedPin = readPins()[ninja.id]
+  const checkHasPin = async (ninjaId) => {
+    const status = await dbService.getPinStatus()
+    setPinStatus(status)
+    return Boolean(status[ninjaId])
+  }
 
-    if (!storedPin) {
-      return { success: false, error: 'No PIN set on this device yet.' }
+  /**
+   * Signing in always requires a PIN that matches the stored hash. The
+   * comparison happens in Postgres; a ninja with no PIN yet simply never
+   * matches, and the selection screen routes them to setup instead.
+   */
+  const login = async (ninja, pin) => {
+    let matches
+
+    try {
+      matches = await dbService.verifyPin(ninja.id, pin)
+    } catch (error) {
+      console.error('PIN verification failed:', error.message)
+      return { success: false, error: 'Could not reach the vault. Try again.' }
     }
 
-    if (storedPin !== pin) {
+    if (!matches) {
       return { success: false, error: 'Invalid PIN. Please try again.' }
     }
 
@@ -87,27 +135,31 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('currentNinja')
   }
 
-  // Used both for the first-run choice and for a later change in Settings:
-  // in either case the new value simply replaces whatever is stored.
-  const updateNinjaPin = (ninjaId, newPin) => {
-    const savedPins = readPins()
-    savedPins[ninjaId] = newPin
-    localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(savedPins))
+  /**
+   * Used both for the first-run choice and for a later change in Settings.
+   * Pass `currentPin` for a change: the database requires it once a PIN
+   * exists, which is what stops one browser from overwriting another's.
+   *
+   * Returns a result instead of throwing, since both callers need to render
+   * the reason — "that is not your current PIN" above all.
+   */
+  const updateNinjaPin = async (ninjaId, newPin, currentPin = null) => {
+    try {
+      await dbService.setPin(ninjaId, newPin, currentPin)
+      setPinStatus((previous) => ({ ...previous, [ninjaId]: true }))
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: describePinFailure(error) }
+    }
   }
-
-  // Drives the choice between asking for a PIN and setting one up. Note this
-  // is per-device, so a ninja on a new browser sets a PIN again.
-  //
-  // There is deliberately no getter for the PIN itself: the UI only needs to
-  // know whether one exists, and `login` does the comparison internally.
-  const hasPin = (ninjaId) => Boolean(readPins()[ninjaId])
 
   const value = {
     currentNinja,
     login,
     logout,
     updateNinjaPin,
-    hasPin,
+    checkHasPin,
+    pinStatus,
     ninjas
   }
 

@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { getNinjaAccent } from '../utils/ninjaHelpers.jsx'
+import VaultStatusModal from './VaultStatusModal'
 import {
   LayoutDashboard,
   Wallet,
@@ -54,6 +56,7 @@ const Sidebar = ({ pendingVotes = 0 }) => {
   const location = useLocation()
   const navigate = useNavigate()
   const accent = getNinjaAccent(currentNinja)
+  const [showVaultStatus, setShowVaultStatus] = useState(false)
 
   const handleLogout = () => {
     logout()
@@ -65,8 +68,13 @@ const Sidebar = ({ pendingVotes = 0 }) => {
       className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r"
       style={{ background: 'var(--surface-raised)', borderColor: 'var(--line-subtle)' }}
     >
-      {/* Brand */}
-      <div className="flex items-center gap-2.5 px-5 pb-5 pt-6">
+      {/* Brand — the door opens Vault Status (sign-ins and keep-alive) */}
+      <button
+        type="button"
+        onClick={() => setShowVaultStatus(true)}
+        aria-label="Open vault status"
+        className="focus-ring mx-3 mt-4 flex items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[color:var(--surface-hover)]"
+      >
         {/* Artwork is 3:2 with transparent padding either side of the door, so
             object-cover trims the padding instead of shrinking the door. */}
         <img
@@ -77,9 +85,9 @@ const Sidebar = ({ pendingVotes = 0 }) => {
         />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-strong">Ninja Vault</p>
-          <p className="text-[11px] text-faint">Emergency Fund</p>
+          <p className="text-[11px] text-faint">Sign-ins &amp; keep-alive</p>
         </div>
-      </div>
+      </button>
 
       {/* Navigation */}
       <nav className="flex flex-col gap-1 px-3">
@@ -120,6 +128,11 @@ const Sidebar = ({ pendingVotes = 0 }) => {
           Sign out
         </button>
       </div>
+
+      <VaultStatusModal
+        isOpen={showVaultStatus}
+        onClose={() => setShowVaultStatus(false)}
+      />
     </aside>
   )
 }

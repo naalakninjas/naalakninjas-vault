@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { getNinjaAccent } from '../utils/ninjaHelpers.jsx'
 import ProfileSheet from './ProfileSheet'
+import VaultStatusModal from './VaultStatusModal'
 
 const MobileHeader = ({ title = 'Vault' }) => {
   const { currentNinja } = useAuth()
   const [showProfileSheet, setShowProfileSheet] = useState(false)
+  const [showVaultStatus, setShowVaultStatus] = useState(false)
   const accent = getNinjaAccent(currentNinja)
 
   return (
@@ -20,12 +22,19 @@ const MobileHeader = ({ title = 'Vault' }) => {
       >
         {/* Artwork is 3:2 with transparent padding either side of the door, so
             object-cover trims the padding instead of shrinking the door. */}
-        <img
-          src="/images/vault-door.png"
-          alt=""
-          className="h-9 w-9 shrink-0 rounded-full object-cover"
-          style={{ boxShadow: '0 0 0 2px var(--brand-gold)' }}
-        />
+        <button
+          type="button"
+          onClick={() => setShowVaultStatus(true)}
+          aria-label="Open vault status"
+          className="focus-ring shrink-0 rounded-full"
+        >
+          <img
+            src="/images/vault-door.png"
+            alt=""
+            className="h-9 w-9 rounded-full object-cover"
+            style={{ boxShadow: '0 0 0 2px var(--brand-gold)' }}
+          />
+        </button>
 
         <h1 className="flex-1 truncate text-base font-semibold text-strong">{title}</h1>
 
@@ -46,6 +55,11 @@ const MobileHeader = ({ title = 'Vault' }) => {
       <ProfileSheet
         isOpen={showProfileSheet}
         onClose={() => setShowProfileSheet(false)}
+      />
+
+      <VaultStatusModal
+        isOpen={showVaultStatus}
+        onClose={() => setShowVaultStatus(false)}
       />
     </>
   )
