@@ -43,6 +43,25 @@ export const formatRelative = (value) => {
   return then.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
 
+/**
+ * A calendar date, for tables and captions: "3 Sep 2026".
+ *
+ * Spelling the month out avoids the ambiguity of a bare numeric date — 9/3
+ * reads as September 3rd or 3rd September depending on where the browser
+ * thinks it is, which is exactly what an unqualified toLocaleDateString()
+ * gave us.
+ */
+export const formatDate = (value) => {
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return '-'
+
+  return at.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  })
+}
+
 /** Date and time together, for the exact moment behind a relative label. */
 export const formatDateTime = (value) => {
   const at = new Date(value)

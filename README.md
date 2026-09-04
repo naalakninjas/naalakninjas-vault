@@ -117,6 +117,7 @@ page. The defaults:
 | `minimum_balance` | ₹50,000 | Reserve that can never be withdrawn |
 | `withdrawal_percentage` | 50% | Cap on a single request, as a share of the available balance |
 | `required_approvals` | 3 | Approvals needed before money is released |
+| `edit_window_hours` | 24 | How long a ninja may still edit or delete their own entry |
 | `lock_period_months` | 3 | Months before withdrawals are allowed — **stored but not enforced**, see below |
 
 **Balance.** The vault balance is total contributions, minus everything ever
@@ -131,7 +132,17 @@ form and by a database trigger.
 **Voting.** The other three vote to approve or reject; you cannot vote on your
 own request. At three approvals the request flips to approved and the money is
 treated as disbursed. At two rejections approval is unreachable, so it flips to
-rejected. Votes are final.
+rejected. Votes are final. Any ninja can share a pending request to WhatsApp to
+nudge the others into voting.
+
+**Corrections.** For `edit_window_hours` after making an entry, a ninja can edit
+or delete their own contribution, and withdraw their own request while it is
+still pending or rejected. After that the row is read-only for everyone — a
+later mistake is fixed with a new entry rather than by rewriting history the
+others have already reconciled. Both the buttons and a `BEFORE UPDATE OR DELETE`
+trigger enforce this, so it holds even against a direct API call. An approved or
+repaid request can never be deleted at all: it is part of the balance, and its
+repayments would cascade away with it.
 
 **Repayment.** Only the borrower can repay their own request, and never more
 than they still owe. Once repayments cover the full amount the request becomes
@@ -262,7 +273,5 @@ code or trigger reads it, so withdrawals are not actually blocked during the
 lock period. Every other rule in the table above is enforced in both the form
 and the database.
 
-**Other things worth knowing:** the production bundle is a single ~626 kB chunk
-(~182 kB gzipped) with no code splitting, and a mission can't be cancelled or
-deleted from the UI — a mistaken request has to be removed from the Supabase
-dashboard.
+**Other things worth knowing:** the production bundle is a single ~644 kB chunk
+(~187 kB gzipped) with no code splitting.

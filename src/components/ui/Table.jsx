@@ -12,7 +12,15 @@ const Table = ({
   pageSize = 10,
   onRowClick,
   emptyMessage = 'No data found',
-  className = ''
+  className = '',
+  /**
+   * Optional per-row card for narrow screens. A table with more than about
+   * four columns can only be read on a phone by scrolling sideways, which
+   * hides whatever is rightmost — usually the row's own action buttons. When
+   * this is supplied, phones get a stacked list and the table appears from
+   * `md` up. Search and pagination are shared by both.
+   */
+  renderCard
 }) => {
   const [sort, setSort] = useState({ key: null, direction: 'asc' })
   const [page, setPage] = useState(1)
@@ -64,20 +72,45 @@ const Table = ({
 
   return (
     <div className={`space-y-3 ${className}`}>
-      {searchable && (
-        <div className="max-w-xs">
-          <Input
-            icon={Search}
-            placeholder="Search…"
-            value={query}
-            onChange={(event) => handleSearch(event.target.value)}
-            aria-label="Search table"
-          />
-        </div>
-      )}
-
       <div className="panel overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Search belongs to the panel, not the page. Floating above it, a
+            320px box against a 1100px table looked like a stray control and
+            left an odd gap; as a header row the two read as one object at any
+            width. Full width on phones, compact from `sm` up. */}
+        {searchable && (
+          <div
+            className="border-b px-4 py-3"
+            style={{ borderColor: 'var(--line-subtle)' }}
+          >
+            <div className="w-full sm:max-w-xs">
+              <Input
+                icon={Search}
+                placeholder="Search…"
+                value={query}
+                onChange={(event) => handleSearch(event.target.value)}
+                aria-label="Search table"
+              />
+            </div>
+          </div>
+        )}
+
+        {renderCard && rows.length > 0 && (
+          <div className="divide-y divide-[color:var(--line-subtle)] md:hidden">
+            {rows.map((row, rowIndex) => (
+              <div
+                key={row.id ?? rowIndex}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                className={
+                  onRowClick ? 'cursor-pointer transition-colors hover:bg-[color:var(--surface-hover)]' : ''
+                }
+              >
+                {renderCard(row, rowIndex)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className={`overflow-x-auto ${renderCard ? 'hidden md:block' : ''}`}>
           <table className="w-full">
             <thead>
               <tr style={{ background: 'var(--surface-overlay)' }}>

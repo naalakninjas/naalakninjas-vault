@@ -109,11 +109,16 @@ CREATE TABLE IF NOT EXISTS login_events (
 --
 -- Recording the run is itself a write, so it doubles as the activity that
 -- keeps the project awake.
+-- `source` is 'cron' for Vercel's scheduled run and 'manual' for the Run now
+-- button in Vault Status. The calendar draws them differently: a manual ping
+-- keeps Postgres awake just as well, but a day that only ever saw a manual
+-- ping is not evidence that the cron fired, and must not look like it is.
 CREATE TABLE IF NOT EXISTS keep_alive_runs (
     id      SERIAL PRIMARY KEY,
     ran_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     ok      BOOLEAN NOT NULL,
-    detail  TEXT
+    detail  TEXT,
+    source  VARCHAR(10) NOT NULL DEFAULT 'cron'
 );
 
 -- Business rules, editable from the Settings page. Values are stored as text
@@ -142,6 +147,10 @@ ALTER TABLE members ADD COLUMN IF NOT EXISTS pin_set_at TIMESTAMP WITH TIME ZONE
 ALTER TABLE repayments     ADD COLUMN IF NOT EXISTS member_id   INTEGER REFERENCES members(id) ON DELETE CASCADE;
 ALTER TABLE repayments     ADD COLUMN IF NOT EXISTS notes       TEXT;
 ALTER TABLE vault_settings ADD COLUMN IF NOT EXISTS description TEXT;
+
+-- Runs recorded before the Run now button existed were all cron runs, which
+-- is exactly what the default backfills them as.
+ALTER TABLE keep_alive_runs ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'cron';
 
 -- An early revision made (member_id, month, year) unique on contributions,
 -- which blocked split payments. Drop it if this project still has it.
@@ -183,7 +192,8 @@ INSERT INTO vault_settings (key, value, description) VALUES
     ('minimum_balance',       '50000', 'Reserve that must always remain in the vault'),
     ('withdrawal_percentage', '50',    'Maximum share of the available balance one mission may request'),
     ('required_approvals',    '3',     'Approvals needed before a mission is approved'),
-    ('lock_period_months',    '3',     'Months before contributions may be withdrawn')
+    ('lock_period_months',    '3',     'Months before contributions may be withdrawn'),
+    ('edit_window_hours',     '24',    'Hours a ninja may still edit or delete their own entry')
 ON CONFLICT (key) DO NOTHING;
 
 
@@ -240,6 +250,28 @@ BEGIN
     min_balance := COALESCE(min_balance, 50000);
 
     RETURN GREATEST(vault_bal - min_balance, 0);
+END;
+$$ LANGUAGE plpgsql;
+
+-- How long a ninja may still change something they entered.
+--
+-- Read from vault_settings so the window can be tuned without editing this
+-- file, and tolerant of a missing or non-numeric value: a broken setting must
+-- not make the ledger permanently uneditable, nor permanently editable.
+CREATE OR REPLACE FUNCTION edit_window_hours()
+RETURNS INTEGER AS $$
+DECLARE
+    configured INTEGER;
+BEGIN
+    BEGIN
+        SELECT NULLIF(value, '')::INTEGER INTO configured
+        FROM vault_settings
+        WHERE key = 'edit_window_hours';
+    EXCEPTION WHEN OTHERS THEN
+        configured := NULL;
+    END;
+
+    RETURN COALESCE(configured, 24);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -460,13 +492,24 @@ $$ LANGUAGE plpgsql;
 -- repayments reference it with ON DELETE CASCADE: deleting one would take the
 -- repayment history with it and make the balance jump. That is enforced here
 -- rather than only in the UI, because every browser shares the same anon key.
+-- Withdrawal is also time-limited, on the same window as contributions: a
+-- request that has been sitting in front of the council for a day should be
+-- decided, not quietly removed.
 CREATE OR REPLACE FUNCTION guard_mission_deletion()
 RETURNS TRIGGER AS $$
+DECLARE
+    window_hours INTEGER := edit_window_hours();
 BEGIN
     IF OLD.status IN ('approved', 'repaid') THEN
         RAISE EXCEPTION
             'Cannot delete a request that was already %; the money has left the vault',
             OLD.status;
+    END IF;
+
+    IF OLD.created_at < NOW() - (window_hours || ' hours')::INTERVAL THEN
+        RAISE EXCEPTION
+            'This request is older than % hours and can no longer be withdrawn',
+            window_hours;
     END IF;
 
     RETURN OLD;
@@ -592,6 +635,33 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- A ninja may correct their own entry for a while after making it, and then
+-- the ledger settles: past the window a contribution is read-only for
+-- everyone. Mistakes older than that are fixed with a new entry, not by
+-- rewriting history that the others have already seen and reconciled.
+--
+-- Covers UPDATE and DELETE in one function, so TG_OP decides what to return —
+-- returning OLD from a BEFORE UPDATE would write the old values straight back
+-- and silently discard the edit.
+CREATE OR REPLACE FUNCTION guard_contribution_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    window_hours INTEGER := edit_window_hours();
+BEGIN
+    IF OLD.created_at < NOW() - (window_hours || ' hours')::INTERVAL THEN
+        RAISE EXCEPTION
+            'This contribution is older than % hours and can no longer be changed',
+            window_hours;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Only the borrower may repay, and never more than they still owe.
 CREATE OR REPLACE FUNCTION validate_repayment()
 RETURNS TRIGGER AS $$
@@ -713,6 +783,13 @@ DROP TRIGGER IF EXISTS trigger_log_contribution_deletion ON contributions;
 CREATE TRIGGER trigger_log_contribution_deletion
     AFTER DELETE ON contributions
     FOR EACH ROW EXECUTE FUNCTION log_contribution_deletion();
+
+-- BEFORE, so it can refuse the change rather than log one that never happened.
+-- db/reset-data.sql disables this to wipe the vault; nothing else should.
+DROP TRIGGER IF EXISTS trigger_guard_contribution_change ON contributions;
+CREATE TRIGGER trigger_guard_contribution_change
+    BEFORE UPDATE OR DELETE ON contributions
+    FOR EACH ROW EXECUTE FUNCTION guard_contribution_change();
 
 DROP TRIGGER IF EXISTS trigger_validate_repayment ON repayments;
 CREATE TRIGGER trigger_validate_repayment
@@ -856,6 +933,7 @@ GRANT SELECT ON v_mission_summary TO anon;
 
 GRANT EXECUTE ON FUNCTION get_vault_balance()                        TO anon;
 GRANT EXECUTE ON FUNCTION get_available_balance()                    TO anon;
+GRANT EXECUTE ON FUNCTION edit_window_hours()                        TO anon;
 GRANT EXECUTE ON FUNCTION add_activity(TEXT, INTEGER, VARCHAR)       TO anon;
 
 GRANT EXECUTE ON FUNCTION member_pin_status()                        TO anon;

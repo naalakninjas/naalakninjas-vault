@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, LifeBuoy, ThumbsUp, ThumbsDown, Trash2 } from 'lucide-react'
+import { Plus, LifeBuoy, ThumbsUp, ThumbsDown, Trash2, Share2 } from 'lucide-react'
 import { useAuth, ninjas } from '../contexts/AuthContext'
 import { dbService } from '../services/supabase'
 import { 
@@ -18,19 +18,43 @@ import {
 } from '../components/ui'
 import { getNinjaBorderColor, getNinjaByName } from '../utils/ninjaHelpers.jsx'
 import { showError, showSuccess, showWarning } from '../utils/toast'
-import { formatMoney } from '../utils/format'
+import { formatDate, formatMoney } from '../utils/format'
+import {
+  DEFAULT_EDIT_WINDOW_HOURS,
+  editWindowRemaining,
+  isWithinEditWindow,
+  readEditWindowHours
+} from '../utils/editWindow'
+import { buildVoteReminder, shareOnWhatsApp } from '../utils/share'
 import MissionForm from '../components/MissionForm'
 import RepaymentForm from '../components/RepaymentForm'
 
-const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, currentNinja, userVotes = [] }) => {
+const MissionCard = ({
+  mission,
+  onVote,
+  onViewDetails,
+  onRepayment,
+  onDelete,
+  onShare,
+  currentNinja,
+  userVotes = [],
+  editWindowHours = DEFAULT_EDIT_WINDOW_HOURS
+}) => {
   const ninja = mission.member_name
   const ninjaRecord = getNinjaByName(ninja, ninjas)
   const isOwnMission = mission.member_id === currentNinja.id
   const hasVoted = userVotes.some(vote => vote.mission_id === mission.id && vote.member_id === currentNinja.id)
   // Only the requester can withdraw their own request, and only while nothing
-  // has moved: an approved or repaid one is already part of the balance, and
-  // the database refuses to delete it.
-  const canDelete = isOwnMission && ['pending', 'rejected'].includes(mission.status)
+  // has moved and the window is open: an approved or repaid one is already part
+  // of the balance, and the database refuses both cases anyway.
+  const canDelete =
+    isOwnMission &&
+    ['pending', 'rejected'].includes(mission.status) &&
+    isWithinEditWindow(mission.created_at, editWindowHours)
+
+  // Anyone can nudge the squad about a request still waiting on votes, not
+  // just the ninja who asked.
+  const canShare = mission.status === 'pending'
   
   const getStatusColor = () => {
     switch (mission.status) {
@@ -63,7 +87,7 @@ const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, cu
             <div className="min-w-0">
               <div className="truncate text-sm font-medium text-strong">{ninja}</div>
               <div className="text-xs text-faint">
-                {new Date(mission.created_at).toLocaleDateString()}
+                {formatDate(mission.created_at)}
               </div>
             </div>
           </div>
@@ -71,15 +95,28 @@ const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, cu
             <Badge variant={getStatusColor()}>
               {mission.status}
             </Badge>
-            {canDelete && (
-              <span onClick={(e) => e.stopPropagation()}>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  icon={Trash2}
-                  aria-label="Withdraw request"
-                  onClick={() => onDelete(mission)}
-                />
+            {(canShare || canDelete) && (
+              <span className="flex items-center" onClick={(e) => e.stopPropagation()}>
+                {canShare && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    icon={Share2}
+                    aria-label="Share on WhatsApp"
+                    title="Remind the squad on WhatsApp"
+                    onClick={() => onShare(mission)}
+                  />
+                )}
+                {canDelete && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    icon={Trash2}
+                    aria-label="Withdraw request"
+                    title={`Can be withdrawn for ${editWindowHours} hours — ${editWindowRemaining(mission.created_at, editWindowHours)}`}
+                    onClick={() => onDelete(mission)}
+                  />
+                )}
               </span>
             )}
           </div>
@@ -119,7 +156,7 @@ const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, cu
           
           {mission.status === 'approved' && (
             <div className="text-xs text-muted">
-              Remaining: ₹{(mission.amount - (mission.total_repaid || 0)).toLocaleString()}
+              Remaining: {formatMoney(mission.amount - (mission.total_repaid || 0))}
             </div>
           )}
         </div>
@@ -159,7 +196,7 @@ const MissionCard = ({ mission, onVote, onViewDetails, onRepayment, onDelete, cu
               onClick={() => onRepayment(mission)}
               className="w-full"
             >
-              Repay ₹{(mission.amount - (mission.total_repaid || 0)).toLocaleString()}
+              Repay {formatMoney(mission.amount - (mission.total_repaid || 0))}
             </Button>
           </div>
         )}
@@ -220,7 +257,7 @@ const StatusFilter = ({ options, active, onChange }) => (
   </div>
 )
 
-const MissionDetailsModal = ({ mission, isOpen, onClose }) => {
+const MissionDetailsModal = ({ mission, isOpen, onClose, onShare }) => {
   if (!mission) return null
 
   const ninjaRecord = getNinjaByName(mission.member_name, ninjas)
@@ -245,7 +282,7 @@ const MissionDetailsModal = ({ mission, isOpen, onClose }) => {
             <div className="min-w-0">
               <h3 className="truncate text-base font-semibold text-strong">{mission.member_name}</h3>
               <p className="text-xs text-faint">
-                Requested on {new Date(mission.created_at).toLocaleDateString()}
+                Requested on {formatDate(mission.created_at)}
               </p>
             </div>
           </div>
@@ -283,6 +320,19 @@ const MissionDetailsModal = ({ mission, isOpen, onClose }) => {
             <p className="mt-1 text-xs text-faint">Rejections</p>
           </Card>
         </div>
+
+        {/* A pending request is waiting on the others, so offer the nudge here
+            as well as on the card. */}
+        {mission.status === 'pending' && (
+          <Button
+            variant="secondary"
+            icon={Share2}
+            onClick={() => onShare(mission)}
+            className="w-full"
+          >
+            Remind the squad on WhatsApp
+          </Button>
+        )}
 
         {/* Repayment Progress (if approved) */}
         {mission.status === 'approved' && (
@@ -326,9 +376,28 @@ const MissionsPage = () => {
   const [statusFilter, setStatusFilter] = useState('all')
   const [pendingVote, setPendingVote] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [editWindowHours, setEditWindowHours] = useState(DEFAULT_EDIT_WINDOW_HOURS)
+  const [requiredApprovals, setRequiredApprovals] = useState(null)
 
   useEffect(() => {
     loadMissions()
+  }, [])
+
+  // Non-critical: the window falls back to 24 hours and the reminder text
+  // simply omits the target count, so a failure here must not blank the page.
+  useEffect(() => {
+    dbService
+      .getSettings()
+      .then((settings) => {
+        setEditWindowHours(readEditWindowHours(settings))
+
+        const approvals = parseInt(
+          (settings ?? []).find((s) => s.key === 'required_approvals')?.value,
+          10
+        )
+        if (Number.isFinite(approvals)) setRequiredApprovals(approvals)
+      })
+      .catch((error) => console.warn('Could not load vault settings:', error.message))
   }, [])
 
   // Opened straight from a dashboard quick action.
@@ -412,6 +481,10 @@ const MissionsPage = () => {
   const handleViewDetails = (mission) => {
     setSelectedMission(mission)
     setShowDetails(true)
+  }
+
+  const handleShare = (mission) => {
+    shareOnWhatsApp(buildVoteReminder(mission, requiredApprovals))
   }
 
   const handleDeleteMission = async () => {
@@ -529,8 +602,10 @@ const MissionsPage = () => {
                     onViewDetails={handleViewDetails}
                     onRepayment={handleRepaymentClick}
                     onDelete={setDeleteTarget}
+                    onShare={handleShare}
                     currentNinja={currentNinja}
                     userVotes={userVotes}
+                    editWindowHours={editWindowHours}
                   />
                 ))}
               </AnimatePresence>
@@ -556,6 +631,7 @@ const MissionsPage = () => {
       <MissionDetailsModal
         mission={selectedMission}
         isOpen={showDetails}
+        onShare={handleShare}
         onClose={() => {
           setShowDetails(false)
           setSelectedMission(null)

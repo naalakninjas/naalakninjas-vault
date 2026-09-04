@@ -8,8 +8,9 @@ import QuickActions from '../components/dashboard/QuickActions'
 import StatGrid from '../components/dashboard/StatGrid'
 import SquadPanel from '../components/dashboard/SquadPanel'
 import ActivityFeed from '../components/dashboard/ActivityFeed'
+import ActivityHistoryModal from '../components/dashboard/ActivityHistoryModal'
 import DashboardSkeleton from '../components/dashboard/DashboardSkeleton'
-import { formatMoney } from '../utils/format'
+import { formatMoney, formatMoneyCompact } from '../utils/format'
 
 const EMPTY = {
   vaultBalance: 0,
@@ -17,7 +18,7 @@ const EMPTY = {
   outstandingAmount: 0,
   totalContributions: 0,
   activeMissions: 0,
-  pendingMissions: 0,
+  awaitingMyVote: 0,
   memberTotals: [],
   recentActivity: []
 }
@@ -39,21 +40,48 @@ const readSetting = (settings, key) => {
 const sumAmounts = (rows = []) =>
   rows.reduce((total, row) => total + (Number(row.amount) || 0), 0)
 
+/**
+ * Requests this ninja can actually act on: still pending, not their own (you
+ * cannot vote on your own request), and not already voted.
+ *
+ * The card used to show every pending request, so filing one made your own
+ * request look like a chore waiting on you, and it kept counting after you had
+ * voted.
+ */
+const countAwaitingVote = (missions = [], votedMissionIds, memberId) =>
+  missions.filter(
+    (mission) =>
+      mission.status === 'pending' &&
+      mission.member_id !== memberId &&
+      !votedMissionIds.has(mission.id)
+  ).length
+
 const Dashboard = () => {
   const { currentNinja, ninjas } = useAuth()
   const [data, setData] = useState(EMPTY)
   const [settings, setSettings] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error
+  const [showHistory, setShowHistory] = useState(false)
 
   const load = useCallback(async (signal) => {
     setStatus('loading')
 
     try {
-      // Settings are non-critical: fall back to defaults rather than failing
-      // the whole dashboard when the table has not been seeded.
-      const [summary, loadedSettings] = await Promise.all([
+      // Settings and votes are non-critical: fall back rather than failing the
+      // whole dashboard when the table has not been seeded or the votes query
+      // fails. With no votes the vote card just over-counts slightly.
+      const [summary, loadedSettings, myVotes] = await Promise.all([
         dbService.getDashboardSummary(),
-        dbService.getSettings().catch(() => null)
+        dbService.getSettings().catch(() => null),
+        currentNinja?.id
+          ? dbService.getVotesByMember(currentNinja.id).catch((error) => {
+              console.warn(
+                'Could not load your votes, so the vote card may over-count:',
+                error.message
+              )
+              return []
+            })
+          : Promise.resolve([])
       ])
 
       if (signal?.aborted) return
@@ -69,7 +97,11 @@ const Dashboard = () => {
         outstandingAmount: Math.max(0, approvedTotal - repaidTotal),
         totalContributions: Number(summary.totalContributions) || 0,
         activeMissions: summary.activeMissions || 0,
-        pendingMissions: summary.pendingMissions || 0,
+        awaitingMyVote: countAwaitingVote(
+          summary.missions,
+          new Set(myVotes.map((vote) => vote.mission_id)),
+          currentNinja?.id
+        ),
         memberTotals: summary.monthlyStatus || [],
         recentActivity: summary.recentActivity || []
       })
@@ -81,7 +113,7 @@ const Dashboard = () => {
       setData(EMPTY)
       setStatus('error')
     }
-  }, [])
+  }, [currentNinja?.id])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -125,6 +157,7 @@ const Dashboard = () => {
     {
       label: 'Contributed all time',
       value: formatMoney(data.totalContributions),
+      compactValue: formatMoneyCompact(data.totalContributions),
       icon: Wallet,
       accent: '#10B981'
     },
@@ -136,7 +169,7 @@ const Dashboard = () => {
     },
     {
       label: 'Awaiting your vote',
-      value: data.pendingMissions,
+      value: data.awaitingMyVote,
       icon: ThumbsUp,
       accent: '#F59E0B'
     }
@@ -179,7 +212,10 @@ const Dashboard = () => {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
           <div className="lg:col-span-3">
-            <ActivityFeed activities={data.recentActivity} />
+            <ActivityFeed
+              activities={data.recentActivity}
+              onViewAll={() => setShowHistory(true)}
+            />
           </div>
           <div className="lg:col-span-2">
             <SquadPanel
@@ -190,6 +226,11 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
+
+      <ActivityHistoryModal
+        isOpen={showHistory}
+        onClose={() => setShowHistory(false)}
+      />
     </div>
   )
 }

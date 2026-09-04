@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, LogIn, ShieldAlert } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogIn, RefreshCw, ShieldAlert } from 'lucide-react'
 import { ninjas } from '../contexts/AuthContext'
 import { dbService } from '../services/supabase'
-import { Avatar, Badge, EmptyState, Modal } from './ui'
+import { Avatar, Badge, Button, EmptyState, Modal } from './ui'
 import { getNinjaBorderColor, getNinjaByName } from '../utils/ninjaHelpers.jsx'
 import { formatDateTime, formatRelative } from '../utils/format'
+import { showError, showSuccess } from '../utils/toast'
 
 const TABS = [
   { key: 'signins', label: 'Sign-ins' },
@@ -86,17 +87,32 @@ const DayCell = ({ date, entry, isToday }) => {
   if (!date) return <div aria-hidden="true" />
 
   const isFuture = date > new Date()
-  const tone = entry ? (entry.ok ? 'ok' : 'failed') : isFuture ? 'future' : 'missed'
+
+  // A day whose only successful pings were manual is shown apart from a day
+  // the cron actually handled, otherwise pressing Run now would paint the
+  // calendar green and hide a scheduler that has stopped firing.
+  const tone = entry
+    ? entry.ok
+      ? entry.cronRuns > 0 ? 'ok' : 'manual'
+      : 'failed'
+    : isFuture
+      ? 'future'
+      : 'missed'
 
   const styles = {
     ok: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    manual: 'bg-violet-500/15 text-violet-200 border-violet-500/30',
     failed: 'bg-red-500/15 text-red-300 border-red-500/30',
     missed: 'text-faint border-[color:var(--line-subtle)]',
     future: 'text-faint/40 border-transparent'
   }[tone]
 
   const label = entry
-    ? `${formatDateTime(entry.latest.ran_at)} — ${entry.ok ? 'success' : entry.latest.detail || 'failed'}`
+    ? `${formatDateTime(entry.latest.ran_at)} — ${
+        entry.ok
+          ? entry.cronRuns > 0 ? 'success' : 'success (manual ping only)'
+          : entry.latest.detail || 'failed'
+      }`
     : isFuture
       ? ''
       : `${date.toLocaleDateString('en-IN', { dateStyle: 'medium' })} — no run recorded`
@@ -115,7 +131,8 @@ const DayCell = ({ date, entry, isToday }) => {
 const Legend = () => (
   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-faint">
     {[
-      ['bg-emerald-500/40', 'Ran successfully'],
+      ['bg-emerald-500/40', 'Cron ran'],
+      ['bg-violet-500/40', 'Manual ping only'],
       ['bg-red-500/40', 'Failed'],
       ['bg-[color:var(--line-subtle)]', 'No run']
     ].map(([swatch, label]) => (
@@ -179,7 +196,7 @@ const SignInList = ({ events }) => {
   )
 }
 
-const KeepAliveCalendar = ({ runs }) => {
+const KeepAliveCalendar = ({ runs, onRun, running }) => {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()))
 
   const runsByDay = useMemo(() => {
@@ -189,8 +206,15 @@ const KeepAliveCalendar = ({ runs }) => {
       const key = toDayKey(run.ran_at)
       const existing = grouped.get(key)
 
+      const isCron = run.source !== 'manual'
+
       if (!existing) {
-        grouped.set(key, { total: 1, ok: run.ok, latest: run })
+        grouped.set(key, {
+          total: 1,
+          ok: run.ok,
+          cronRuns: isCron && run.ok ? 1 : 0,
+          latest: run
+        })
         return
       }
 
@@ -198,6 +222,7 @@ const KeepAliveCalendar = ({ runs }) => {
       // run is not hidden by a retry that happened to work.
       existing.total += 1
       existing.ok = existing.ok && run.ok
+      if (isCron && run.ok) existing.cronRuns += 1
       if (new Date(run.ran_at) > new Date(existing.latest.ran_at)) existing.latest = run
     })
 
@@ -233,35 +258,52 @@ const KeepAliveCalendar = ({ runs }) => {
         className="rounded-xl border p-3"
         style={{ borderColor: 'var(--line-subtle)', background: 'var(--surface-raised)' }}
       >
-        {lastRun ? (
-          <>
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 rounded-full ${lastRun.ok ? 'bg-emerald-400' : 'bg-red-400'}`}
-              />
-              <p className="text-sm font-medium text-strong">
-                {lastRun.ok ? 'Last run succeeded' : 'Last run failed'}
-              </p>
-              <span className="text-xs text-faint">{formatRelative(lastRun.ran_at)}</span>
-            </div>
-            <p className="mt-1 text-xs text-muted">
-              {formatDateTime(lastRun.ran_at)}
-              {lastRun.detail ? ` — ${lastRun.detail}` : ''}
-            </p>
-            <p className="mt-1 text-xs text-faint">
-              {health} of the last 30 days pinged successfully. Supabase pauses a
-              free project after 7 idle days.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-sm font-medium text-strong">No runs recorded yet</p>
-            <p className="mt-1 text-xs text-muted">
-              The cron job runs daily at 05:00 UTC (10:30 IST). The first entry
-              appears after its next run.
-            </p>
-          </>
-        )}
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            {lastRun ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`h-2 w-2 rounded-full ${lastRun.ok ? 'bg-emerald-400' : 'bg-red-400'}`}
+                  />
+                  <p className="text-sm font-medium text-strong">
+                    {lastRun.ok ? 'Last run succeeded' : 'Last run failed'}
+                  </p>
+                  <span className="text-xs text-faint">{formatRelative(lastRun.ran_at)}</span>
+                  {lastRun.source === 'manual' && <Badge variant="default">Manual</Badge>}
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  {formatDateTime(lastRun.ran_at)}
+                  {lastRun.detail ? ` — ${lastRun.detail}` : ''}
+                </p>
+                <p className="mt-1 text-xs text-faint">
+                  {health} of the last 30 days pinged successfully. Supabase pauses a
+                  free project after 7 idle days.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-strong">No runs recorded yet</p>
+                <p className="mt-1 text-xs text-muted">
+                  The cron job runs daily at 05:00 UTC (10:30 IST). The first entry
+                  appears after its next run.
+                </p>
+              </>
+            )}
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            icon={RefreshCw}
+            onClick={onRun}
+            loading={running}
+            disabled={running}
+            className="shrink-0"
+          >
+            Run now
+          </Button>
+        </div>
       </div>
 
       {/* Month navigation */}
@@ -329,6 +371,26 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
+  const [running, setRunning] = useState(false)
+
+  const handleRun = async () => {
+    setRunning(true)
+
+    try {
+      const result = await dbService.runKeepAlivePing()
+
+      if (result.ok) showSuccess('Pinged the database and recorded the run')
+      else showError(result.detail)
+
+      // Re-read rather than pushing the new row in locally, so the calendar
+      // reflects what was actually stored.
+      setRuns(await dbService.getKeepAliveRuns())
+    } catch (error) {
+      showError(`Could not record the run: ${error.message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
 
   // Refetched on each open rather than cached: the whole point is to show the
   // current state, and both queries are small.
@@ -402,7 +464,7 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
         ) : tab === 'signins' ? (
           <SignInList events={logins} />
         ) : (
-          <KeepAliveCalendar runs={runs} />
+          <KeepAliveCalendar runs={runs} onRun={handleRun} running={running} />
         )}
       </div>
     </Modal>

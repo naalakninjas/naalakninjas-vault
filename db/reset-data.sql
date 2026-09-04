@@ -40,9 +40,16 @@ SELECT 'activity',      COUNT(*), NULL FROM activity;
 -- Otherwise every removed row would append a "removed a ₹X contribution"
 -- entry to `activity` — which we are also clearing, but the trigger would
 -- refill it as we go.
+--
+-- The edit-window guards are disabled for the same span. They exist to stop a
+-- ninja rewriting week-old history from the app, and a deliberate full reset
+-- is exactly the case they would otherwise block: any row older than
+-- `edit_window_hours` would refuse to budge.
 -- ----------------------------------------------------------------------------
 
 ALTER TABLE contributions DISABLE TRIGGER trigger_log_contribution_deletion;
+ALTER TABLE contributions DISABLE TRIGGER trigger_guard_contribution_change;
+ALTER TABLE missions      DISABLE TRIGGER trigger_guard_mission_deletion;
 
 DELETE FROM votes;
 DELETE FROM repayments;
@@ -51,6 +58,8 @@ DELETE FROM contributions;
 DELETE FROM activity;
 
 ALTER TABLE contributions ENABLE TRIGGER trigger_log_contribution_deletion;
+ALTER TABLE contributions ENABLE TRIGGER trigger_guard_contribution_change;
+ALTER TABLE missions      ENABLE TRIGGER trigger_guard_mission_deletion;
 
 
 -- ----------------------------------------------------------------------------

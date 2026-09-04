@@ -175,6 +175,20 @@ export const dbService = {
   },
 
   // Votes
+  /**
+   * Every vote one ninja has cast. Lets the dashboard answer "is this waiting
+   * on me?" with a single query, instead of one per mission.
+   */
+  async getVotesByMember(memberId) {
+    const { data, error } = await supabase
+      .from('votes')
+      .select('mission_id, vote')
+      .eq('member_id', memberId)
+
+    if (error) throw error
+    return data ?? []
+  },
+
   async getVotesForMission(missionId) {
     const { data, error } = await supabase
       .from('votes')
@@ -273,6 +287,60 @@ export const dbService = {
       .select('*')
       .gte('ran_at', since.toISOString())
       .order('ran_at', { ascending: true })
+
+    if (error) throw error
+    return data ?? []
+  },
+
+  /**
+   * Runs the keep-alive from the browser, for the Run now button.
+   *
+   * Deliberately does not call /api/keep-alive: that endpoint requires the
+   * CRON_SECRET bearer token, and a client-side app cannot hold a secret. So
+   * this repeats the work the cron does — a real read, then a recorded write —
+   * against the same database with the same anon key. Two statements against
+   * Postgres is what resets Supabase's inactivity timer, and the timer does
+   * not care who sent them.
+   *
+   * Marked `source: 'manual'` so the calendar never passes this off as proof
+   * that the scheduled job is healthy.
+   */
+  async runKeepAlivePing() {
+    const { error: readError } = await supabase.from('members').select('id').limit(1)
+
+    const ok = !readError
+    const detail = ok
+      ? 'Manual run from the app'
+      : `Manual run failed: ${readError.message}`
+
+    // Recorded even when the read failed — a failed ping is the most useful
+    // thing the calendar can show.
+    const { error: writeError } = await supabase
+      .from('keep_alive_runs')
+      .insert([{ ok, detail, source: 'manual' }])
+
+    if (writeError) throw writeError
+    return { ok, detail }
+  },
+
+  /**
+   * Activity between two instants, newest first. Used by the history modal,
+   * where the range comes from the month (and optionally the day) picked.
+   *
+   * `from` is inclusive and `to` exclusive, so callers pass the start of the
+   * next period as `to` and no entry lands in two ranges.
+   */
+  async getActivityRange(from, to, limit = 300) {
+    const { data, error } = await supabase
+      .from('activity')
+      .select(`
+        *,
+        members(name, color)
+      `)
+      .gte('created_at', from.toISOString())
+      .lt('created_at', to.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(limit)
 
     if (error) throw error
     return data ?? []

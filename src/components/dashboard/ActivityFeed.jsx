@@ -1,52 +1,23 @@
 import { motion } from 'framer-motion'
-import { formatDistanceToNow } from 'date-fns'
+import { ChevronRight } from 'lucide-react'
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
-  LifeBuoy,
-  ThumbsUp,
-  Trash2,
-  Activity as ActivityIcon
-} from 'lucide-react'
-import { formatMoney } from '../../utils/format'
-
-/** Maps an activity's action_type onto an icon and accent colour. */
-const presentation = (actionType = '') => {
-  const type = actionType.toLowerCase()
-
-  if (type.includes('contribution_deleted')) {
-    return { icon: Trash2, accent: '#F87171' }
-  }
-  if (type.includes('contribution')) {
-    return { icon: ArrowDownLeft, accent: '#10B981' }
-  }
-  if (type.includes('repay')) {
-    return { icon: ArrowUpRight, accent: '#3B82F6' }
-  }
-  if (type.includes('vote')) {
-    return { icon: ThumbsUp, accent: '#F59E0B' }
-  }
-  if (type.includes('mission')) {
-    return { icon: LifeBuoy, accent: '#8B5CF6' }
-  }
-  return { icon: ActivityIcon, accent: '#A1A1AA' }
-}
+  ActivityIcon,
+  presentation,
+  relativeTime,
+  tidyMessage
+} from '../../utils/activityPresentation'
 
 /**
- * Activity messages are composed by database triggers, so amounts arrive as
- * raw numerics like "₹5000.00". Re-render them with the app's money format.
+ * The five most recent entries, with everything older behind "View all".
+ *
+ * The list used to grow with whatever the dashboard fetched, which pushed the
+ * squad panel beside it out of alignment and buried the balance on a phone.
+ * The cap is enforced here as well as in the query, so this panel stays a
+ * fixed size regardless of what it is handed.
  */
-const tidyMessage = (message = '') =>
-  message.replace(/₹\s*(\d+(?:\.\d+)?)/g, (_, amount) => formatMoney(amount))
+const VISIBLE_COUNT = 5
 
-const relativeTime = (timestamp) => {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  if (Number.isNaN(date.getTime())) return ''
-  return formatDistanceToNow(date, { addSuffix: true })
-}
-
-const ActivityFeed = ({ activities = [] }) => (
+const ActivityFeed = ({ activities = [], onViewAll }) => (
   <motion.section
     initial={{ opacity: 0, y: 12 }}
     animate={{ opacity: 1, y: 0 }}
@@ -54,10 +25,21 @@ const ActivityFeed = ({ activities = [] }) => (
     className="panel"
   >
     <header
-      className="border-b px-5 py-3.5"
+      className="flex items-center gap-3 border-b px-5 py-3.5"
       style={{ borderColor: 'var(--line-subtle)' }}
     >
-      <h2 className="text-sm font-semibold text-strong">Recent activity</h2>
+      <h2 className="flex-1 text-sm font-semibold text-strong">Recent activity</h2>
+
+      {onViewAll && (
+        <button
+          type="button"
+          onClick={onViewAll}
+          className="focus-ring -mr-1 flex shrink-0 items-center gap-0.5 rounded-lg px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:text-strong"
+        >
+          View all
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+      )}
     </header>
 
     {activities.length === 0 ? (
@@ -75,7 +57,7 @@ const ActivityFeed = ({ activities = [] }) => (
       </div>
     ) : (
       <ul className="divide-y divide-[color:var(--line-subtle)]">
-        {activities.map((activity) => {
+        {activities.slice(0, VISIBLE_COUNT).map((activity) => {
           const { icon: Icon, accent } = presentation(activity.action_type)
 
           return (

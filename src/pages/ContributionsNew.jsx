@@ -19,7 +19,13 @@ import {
 } from '../components/ui'
 import { getNinjaBorderColor } from '../utils/ninjaHelpers.jsx'
 import { showError, showSuccess } from '../utils/toast'
-import { formatMoney } from '../utils/format'
+import { formatDate, formatMoney } from '../utils/format'
+import {
+  DEFAULT_EDIT_WINDOW_HOURS,
+  editWindowRemaining,
+  isWithinEditWindow,
+  readEditWindowHours
+} from '../utils/editWindow'
 import ContributionForm from '../components/ContributionForm'
 
 const ContributionsPage = () => {
@@ -35,6 +41,7 @@ const ContributionsPage = () => {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear())
   // Overwritten by the monthly_contribution setting once it loads.
   const [perMemberTarget, setPerMemberTarget] = useState(5000)
+  const [editWindowHours, setEditWindowHours] = useState(DEFAULT_EDIT_WINDOW_HOURS)
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -69,6 +76,8 @@ const ContributionsPage = () => {
       if (Number.isFinite(configured) && configured > 0) {
         setPerMemberTarget(configured)
       }
+
+      setEditWindowHours(readEditWindowHours(settings))
     } catch (error) {
       console.error('Error loading contributions:', error)
       setContributions([])
@@ -105,7 +114,9 @@ const ContributionsPage = () => {
       showSuccess('Contribution deleted')
     } catch (error) {
       console.error('Error deleting contribution:', error)
-      showError('Failed to delete contribution')
+      // Carries the guard trigger's reason, which is the likely cause once an
+      // entry is older than the edit window.
+      showError(`Failed to delete contribution: ${error.message}`)
     }
   }
 
@@ -116,6 +127,99 @@ const ContributionsPage = () => {
     
   const monthlyGoal = ninjas.length * perMemberTarget
   const progressPercentage = (totalThisMonth / monthlyGoal) * 100
+
+  // Shared by the desktop table cell and the mobile card, so the rules about
+  // who may change what live in one place.
+  const renderActions = (row) => {
+    // Each ninja manages only their own entries — editing someone else's
+    // row would re-stamp it with the editor's member_id.
+    if (row.member_id !== currentNinja?.id) {
+      return <span className="text-xs text-faint">—</span>
+    }
+
+    // Own entry, but the correction window has closed. Says so rather than
+    // hiding the controls, so the row does not look broken next to a newer
+    // one that still has buttons. The guard trigger enforces this too.
+    if (!isWithinEditWindow(row.created_at, editWindowHours)) {
+      return (
+        <span
+          className="text-xs text-faint"
+          title={`Editing closed ${editWindowHours} hours after the entry was added`}
+        >
+          Locked
+        </span>
+      )
+    }
+
+    return (
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Edit}
+          aria-label="Edit contribution"
+          onClick={(e) => {
+            e.stopPropagation()
+            setEditingContribution(row)
+            setShowForm(true)
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="xs"
+          icon={Trash2}
+          aria-label="Delete contribution"
+          onClick={(e) => {
+            e.stopPropagation()
+            setDeleteTarget(row)
+          }}
+        />
+        <span className="whitespace-nowrap text-[11px] text-faint">
+          {editWindowRemaining(row.created_at, editWindowHours)}
+        </span>
+      </div>
+    )
+  }
+
+  /**
+   * The phone layout. Seven columns cannot be read on a narrow screen, and
+   * sideways scrolling pushed the Edit and Delete buttons out of sight
+   * entirely, so each entry becomes a card instead.
+   */
+  const renderCard = (row) => {
+    const ninja = ninjas.find((n) => n.id === row.member_id)
+
+    return (
+      <div className="space-y-3 px-4 py-3.5">
+        <div className="flex items-start gap-3">
+          <Avatar
+            src={ninja?.avatar}
+            name={ninja?.name}
+            size="sm"
+            borderColor={getNinjaBorderColor(ninja)}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium text-strong">{ninja?.name}</div>
+            <div className="text-xs text-muted">
+              {months[row.month - 1]} {row.year}
+              {row.payment_date ? ` · paid ${formatDate(row.payment_date)}` : ''}
+            </div>
+          </div>
+          <div className="numeric shrink-0 text-sm font-semibold text-emerald-400">
+            {formatMoney(row.amount)}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Badge variant="success">Paid</Badge>
+          {row.utr_number && (
+            <span className="truncate text-xs text-faint">UTR {row.utr_number}</span>
+          )}
+          <span className="ml-auto shrink-0">{renderActions(row)}</span>
+        </div>
+      </div>
+    )
+  }
 
   // Prepare table data
   const tableColumns = [
@@ -144,15 +248,15 @@ const ContributionsPage = () => {
       key: 'amount',
       title: 'Amount',
       render: (value) => (
-        <div className="font-semibold text-emerald-400">
-          ₹{parseFloat(value || 0).toLocaleString()}
+        <div className="numeric font-semibold text-emerald-400">
+          {formatMoney(value)}
         </div>
       )
     },
     {
       key: 'payment_date',
       title: 'Date',
-      render: (value) => value ? new Date(value).toLocaleDateString() : '-'
+      render: (value) => (value ? formatDate(value) : '-')
     },
     {
       key: 'month',
@@ -176,39 +280,8 @@ const ContributionsPage = () => {
     {
       key: 'actions',
       title: 'Actions',
-      render: (_, row) => {
-        // Each ninja manages only their own entries — editing someone else's
-        // row would re-stamp it with the editor's member_id.
-        if (row.member_id !== currentNinja?.id) {
-          return <span className="text-xs text-faint">—</span>
-        }
-
-        return (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="xs"
-              icon={Edit}
-              aria-label="Edit contribution"
-              onClick={(e) => {
-                e.stopPropagation()
-                setEditingContribution(row)
-                setShowForm(true)
-              }}
-            />
-            <Button
-              variant="ghost"
-              size="xs"
-              icon={Trash2}
-              aria-label="Delete contribution"
-              onClick={(e) => {
-                e.stopPropagation()
-                setDeleteTarget(row)
-              }}
-            />
-          </div>
-        )
-      }
+      sortable: false,
+      render: (_, row) => renderActions(row)
     }
   ]
 
@@ -337,9 +410,8 @@ const ContributionsPage = () => {
             <Table
               columns={tableColumns}
               data={contributions}
+              renderCard={renderCard}
               searchable={true}
-              filterable={true}
-              exportable={true}
               pagination={true}
               pageSize={10}
             />
