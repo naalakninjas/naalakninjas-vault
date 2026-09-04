@@ -239,6 +239,15 @@ export const dbService = {
     return data[0]
   },
 
+  async deleteRepayment(id) {
+    const { error } = await supabase
+      .from('repayments')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
   // Activity
   async getActivity(limit = 20) {
     const { data, error } = await supabase

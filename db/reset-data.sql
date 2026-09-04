@@ -49,6 +49,8 @@ SELECT 'activity',      COUNT(*), NULL FROM activity;
 
 ALTER TABLE contributions DISABLE TRIGGER trigger_log_contribution_deletion;
 ALTER TABLE contributions DISABLE TRIGGER trigger_guard_contribution_change;
+ALTER TABLE repayments    DISABLE TRIGGER trigger_log_repayment_deletion;
+ALTER TABLE repayments    DISABLE TRIGGER trigger_guard_repayment_change;
 ALTER TABLE missions      DISABLE TRIGGER trigger_guard_mission_deletion;
 
 DELETE FROM votes;
@@ -59,6 +61,8 @@ DELETE FROM activity;
 
 ALTER TABLE contributions ENABLE TRIGGER trigger_log_contribution_deletion;
 ALTER TABLE contributions ENABLE TRIGGER trigger_guard_contribution_change;
+ALTER TABLE repayments    ENABLE TRIGGER trigger_log_repayment_deletion;
+ALTER TABLE repayments    ENABLE TRIGGER trigger_guard_repayment_change;
 ALTER TABLE missions      ENABLE TRIGGER trigger_guard_mission_deletion;
 
 

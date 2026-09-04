@@ -166,8 +166,9 @@ still pending or rejected. After that the row is read-only for everyone — a
 later mistake is fixed with a new entry rather than by rewriting history the
 others have already reconciled. Both the buttons and a `BEFORE UPDATE OR DELETE`
 trigger enforce this, so it holds even against a direct API call. An approved or
-repaid request can never be deleted at all: it is part of the balance, and its
-repayments would cascade away with it.
+repaid request can be deleted only once every repayment on it is gone first —
+otherwise the cascade would erase repayment history and make the balance jump.
+Pending and rejected requests can still be withdrawn only within the edit window.
 
 **Repayment.** Only the borrower can repay their own request, and never more
 than they still owe. Once repayments cover the full amount the request becomes

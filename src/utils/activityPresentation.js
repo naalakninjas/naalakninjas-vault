@@ -31,6 +31,9 @@ export const presentation = (actionType = '') => {
   if (type.includes('repay')) {
     return { icon: ArrowUpRight, accent: '#3B82F6' }
   }
+  if (type.includes('repayment_deleted')) {
+    return { icon: Trash2, accent: '#F87171' }
+  }
   // A single ninja's vote, then the outcome it produced. Checked before the
   // generic 'vote' and 'mission' cases, which would flatten approve and reject
   // into one indistinguishable icon.

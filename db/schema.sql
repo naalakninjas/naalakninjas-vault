@@ -526,25 +526,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Withdrawing a request is only safe while no money has moved, so deletion is
--- limited to 'pending' and 'rejected'.
+-- Withdrawing a request while it is still pending or rejected is time-limited,
+-- on the same window as contributions.
 --
--- An 'approved' or 'repaid' mission is part of get_vault_balance(), and
--- repayments reference it with ON DELETE CASCADE: deleting one would take the
--- repayment history with it and make the balance jump. That is enforced here
--- rather than only in the UI, because every browser shares the same anon key.
--- Withdrawal is also time-limited, on the same window as contributions: a
--- request that has been sitting in front of the council for a day should be
--- decided, not quietly removed.
+-- Once approved or repaid, deletion is only blocked while repayments still
+-- exist on it — remove those first, then the request can go. That is the
+-- cleanup path when a repayment was logged in error: delete the repayment rows,
+-- then delete the request. Deleting an approved request that still has
+-- repayments would cascade them away and make the balance jump, so that stays
+-- forbidden.
 CREATE OR REPLACE FUNCTION guard_mission_deletion()
 RETURNS TRIGGER AS $$
 DECLARE
     window_hours INTEGER := edit_window_hours();
 BEGIN
     IF OLD.status IN ('approved', 'repaid') THEN
-        RAISE EXCEPTION
-            'Cannot delete a request that was already %; the money has left the vault',
-            OLD.status;
+        IF EXISTS (SELECT 1 FROM repayments WHERE mission_id = OLD.id) THEN
+            RAISE EXCEPTION
+                'Cannot delete a request that still has repayments logged; remove those first';
+        END IF;
+
+        RETURN OLD;
     END IF;
 
     IF OLD.created_at < NOW() - (window_hours || ' hours')::INTERVAL THEN
@@ -850,6 +852,63 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- A repayment may be corrected for a while after it was logged, on the same
+-- window as contributions. After that the ledger settles.
+CREATE OR REPLACE FUNCTION guard_repayment_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    window_hours INTEGER := edit_window_hours();
+BEGIN
+    IF OLD.created_at < NOW() - (window_hours || ' hours')::INTERVAL THEN
+        RAISE EXCEPTION
+            'This repayment is older than % hours and can no longer be changed',
+            window_hours;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Log a removed repayment and put the request back to approved when it is no
+-- longer fully settled. Without this, deleting a row in Supabase left the
+-- mission stuck on 'repaid' even though the money was gone from the ledger.
+CREATE OR REPLACE FUNCTION log_repayment_deletion()
+RETURNS TRIGGER AS $$
+DECLARE
+    member_name    TEXT;
+    mission_amount DECIMAL(10,2);
+    total_repaid   DECIMAL(10,2);
+BEGIN
+    SELECT name INTO member_name FROM members WHERE id = OLD.member_id;
+
+    PERFORM add_activity(
+        COALESCE(member_name, 'A ninja') || ' removed a ₹' || OLD.amount || ' repayment',
+        OLD.member_id,
+        'repayment_deleted',
+        OLD.mission_id
+    );
+
+    SELECT amount INTO mission_amount FROM missions WHERE id = OLD.mission_id;
+
+    SELECT COALESCE(SUM(amount), 0) INTO total_repaid
+    FROM repayments
+    WHERE mission_id = OLD.mission_id;
+
+    IF total_repaid < mission_amount THEN
+        UPDATE missions
+           SET status = 'approved'
+         WHERE id = OLD.mission_id
+           AND status = 'repaid';
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
 
 -- ============================================================================
 -- 7. TRIGGERS
@@ -934,6 +993,16 @@ DROP TRIGGER IF EXISTS trigger_process_repayment ON repayments;
 CREATE TRIGGER trigger_process_repayment
     AFTER INSERT ON repayments
     FOR EACH ROW EXECUTE FUNCTION process_repayment();
+
+DROP TRIGGER IF EXISTS trigger_guard_repayment_change ON repayments;
+CREATE TRIGGER trigger_guard_repayment_change
+    BEFORE UPDATE OR DELETE ON repayments
+    FOR EACH ROW EXECUTE FUNCTION guard_repayment_change();
+
+DROP TRIGGER IF EXISTS trigger_log_repayment_deletion ON repayments;
+CREATE TRIGGER trigger_log_repayment_deletion
+    AFTER DELETE ON repayments
+    FOR EACH ROW EXECUTE FUNCTION log_repayment_deletion();
 
 -- Superseded trigger names and no-op functions from earlier revisions.
 DROP TRIGGER  IF EXISTS trigger_validate_mission_amount    ON missions;

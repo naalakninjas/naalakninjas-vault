@@ -258,10 +258,73 @@ const StatusFilter = ({ options, active, onChange }) => (
   </div>
 )
 
-const MissionDetailsModal = ({ mission, isOpen, onClose, onShare }) => {
+const MissionDetailsModal = ({
+  mission,
+  isOpen,
+  onClose,
+  onShare,
+  currentNinja,
+  editWindowHours = DEFAULT_EDIT_WINDOW_HOURS,
+  onDeleteRepayment
+}) => {
+  const [repayments, setRepayments] = useState([])
+  const [loadingRepayments, setLoadingRepayments] = useState(false)
+
+  useEffect(() => {
+    if (!isOpen || !mission?.id) {
+      setRepayments([])
+      return
+    }
+
+    let active = true
+    setLoadingRepayments(true)
+
+    dbService
+      .getRepayments(mission.id)
+      .then((rows) => {
+        if (active) setRepayments(rows || [])
+      })
+      .catch((error) => {
+        console.warn('Could not load repayments for this request:', error.message)
+        if (active) setRepayments([])
+      })
+      .finally(() => {
+        if (active) setLoadingRepayments(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [isOpen, mission?.id])
+
   if (!mission) return null
 
   const ninjaRecord = getNinjaByName(mission.member_name, ninjas)
+  const isOwner = currentNinja?.id === mission.member_id
+  const showRepayments =
+    isOwner && (mission.status === 'approved' || mission.status === 'repaid')
+
+  const renderRepaymentActions = (repayment) => {
+    if (!isWithinEditWindow(repayment.created_at, editWindowHours)) {
+      return (
+        <span className="text-[11px] text-faint" title="Repayments lock after 24 hours">
+          Locked
+        </span>
+      )
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => onDeleteRepayment?.(repayment)}
+        className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+        title={`Can be removed for ${editWindowRemaining(repayment.created_at, editWindowHours)}`}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Remove
+      </button>
+    )
+  }
 
   return (
     <Modal
@@ -335,8 +398,8 @@ const MissionDetailsModal = ({ mission, isOpen, onClose, onShare }) => {
           </Button>
         )}
 
-        {/* Repayment Progress (if approved) */}
-        {mission.status === 'approved' && (
+        {/* Repayment progress and history */}
+        {(mission.status === 'approved' || mission.status === 'repaid') && (
           <Card className="p-4 sm:p-5">
             <h4 className="mb-3 text-sm font-semibold text-strong">Repayment Progress</h4>
             <div className="space-y-3">
@@ -346,15 +409,52 @@ const MissionDetailsModal = ({ mission, isOpen, onClose, onShare }) => {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted">Remaining</span>
-                <span className="numeric text-strong">{formatMoney(mission.amount - (mission.total_repaid || 0))}</span>
+                <span className="numeric text-strong">
+                  {formatMoney(Math.max(0, mission.amount - (mission.total_repaid || 0)))}
+                </span>
               </div>
               <div className="w-full bg-[color:var(--line-subtle)] rounded-full h-3">
-                <div 
+                <div
                   className="h-3 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 transition-all duration-500"
-                  style={{ width: `${Math.min(((mission.total_repaid || 0) / mission.amount) * 100, 100)}%` }}
+                  style={{
+                    width: `${Math.min(((mission.total_repaid || 0) / mission.amount) * 100, 100)}%`
+                  }}
                 />
               </div>
             </div>
+
+            {showRepayments && (
+              <div className="mt-4 border-t border-[color:var(--line-subtle)] pt-4">
+                <h5 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+                  Your repayments
+                </h5>
+
+                {loadingRepayments ? (
+                  <p className="text-sm text-faint">Loading repayments...</p>
+                ) : repayments.length === 0 ? (
+                  <p className="text-sm text-faint">No repayments logged yet.</p>
+                ) : (
+                  <ul className="divide-y divide-[color:var(--line-subtle)]">
+                    {repayments.map((repayment) => (
+                      <li
+                        key={repayment.id}
+                        className="flex items-center justify-between gap-3 py-2.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="numeric text-sm font-medium text-strong">
+                            {formatMoney(repayment.amount)}
+                          </p>
+                          <p className="text-[11px] text-faint">
+                            {formatDate(repayment.payment_date || repayment.created_at)}
+                          </p>
+                        </div>
+                        {renderRepaymentActions(repayment)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </Card>
         )}
       </div>
@@ -377,6 +477,7 @@ const MissionsPage = () => {
   const [statusFilter, setStatusFilter] = useState('all')
   const [pendingVote, setPendingVote] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [repaymentDeleteTarget, setRepaymentDeleteTarget] = useState(null)
   const [editWindowHours, setEditWindowHours] = useState(DEFAULT_EDIT_WINDOW_HOURS)
   const [requiredApprovals, setRequiredApprovals] = useState(null)
 
@@ -548,16 +649,42 @@ const MissionsPage = () => {
   const handleRepaymentSubmit = async (repaymentData) => {
     try {
       await dbService.addRepayment(repaymentData)
-      
+
       // Refresh missions to update status
       await loadMissions()
-      
+
       setShowRepaymentForm(false)
       setSelectedRepaymentMission(null)
       showSuccess('Repayment recorded successfully!')
     } catch (error) {
       console.error('Failed to record repayment:', error)
       showError(`Failed to record repayment: ${error.message}`)
+    }
+  }
+
+  const handleDeleteRepayment = async () => {
+    const target = repaymentDeleteTarget
+    if (!target) return
+
+    try {
+      await dbService.deleteRepayment(target.id)
+      await loadMissions()
+      setRepaymentDeleteTarget(null)
+
+      setSelectedMission((current) =>
+        current?.id === target.mission_id
+          ? {
+              ...current,
+              total_repaid: Math.max(0, (current.total_repaid || 0) - Number(target.amount)),
+              status: current.status === 'repaid' ? 'approved' : current.status
+            }
+          : current
+      )
+
+      showSuccess('Repayment removed')
+    } catch (error) {
+      console.error('Failed to delete repayment:', error)
+      showError(`Failed to delete repayment: ${error.message}`)
     }
   }
 
@@ -675,6 +802,9 @@ const MissionsPage = () => {
           setShowDetails(false)
           setSelectedMission(null)
         }}
+        currentNinja={currentNinja}
+        editWindowHours={editWindowHours}
+        onDeleteRepayment={setRepaymentDeleteTarget}
       />
 
       {/* Repayment Modal */}
@@ -712,6 +842,20 @@ const MissionsPage = () => {
         }
         details="You cannot change your vote afterwards."
         confirmLabel={pendingVote?.voteType === 'approve' ? 'Approve' : 'Reject'}
+      />
+
+      <ConfirmDialog
+        isOpen={Boolean(repaymentDeleteTarget)}
+        onClose={() => setRepaymentDeleteTarget(null)}
+        onConfirm={handleDeleteRepayment}
+        title="Remove this repayment?"
+        message={
+          repaymentDeleteTarget
+            ? `${formatMoney(repaymentDeleteTarget.amount)} will be taken off this request.`
+            : ''
+        }
+        details="If this was the final payment, the request goes back to approved until it is fully repaid again."
+        confirmLabel="Remove"
       />
 
       {/* Withdrawing takes any votes already cast with it, so say so */}
