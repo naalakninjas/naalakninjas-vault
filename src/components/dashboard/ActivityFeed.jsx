@@ -6,6 +6,7 @@ import {
   relativeTime,
   tidyMessage
 } from '../../utils/activityPresentation'
+import ActivityLink from './ActivityLink'
 
 /**
  * The five most recent entries, with everything older behind "View all".
@@ -17,7 +18,7 @@ import {
  */
 const VISIBLE_COUNT = 5
 
-const ActivityFeed = ({ activities = [], onViewAll }) => (
+const ActivityFeed = ({ activities = [], onViewAll, onOpenMission }) => (
   <motion.section
     initial={{ opacity: 0, y: 12 }}
     animate={{ opacity: 1, y: 0 }}
@@ -61,23 +62,33 @@ const ActivityFeed = ({ activities = [], onViewAll }) => (
           const { icon: Icon, accent } = presentation(activity.action_type)
 
           return (
-            <li key={activity.id} className="flex items-start gap-3 px-5 py-3">
-              <span
-                className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-                style={{ background: `${accent}1F`, color: accent }}
+            <li key={activity.id}>
+              <ActivityLink
+                missionId={activity.mission_id}
+                onOpenMission={onOpenMission}
+                className="flex items-start gap-3 px-5 py-3"
               >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
+                <span
+                  className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                  style={{ background: `${accent}1F`, color: accent }}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                </span>
 
-              {/* The message already names the member, so the meta line is just time */}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm leading-snug text-strong">
-                  {tidyMessage(activity.message)}
-                </p>
-                <p className="mt-0.5 text-[11px] text-faint">
-                  {relativeTime(activity.created_at)}
-                </p>
-              </div>
+                {/* The message already names the member, so the meta line is just time */}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm leading-snug text-strong">
+                    {tidyMessage(activity.message)}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-faint">
+                    {relativeTime(activity.created_at)}
+                  </p>
+                </div>
+
+                {activity.mission_id && onOpenMission && (
+                  <ChevronRight className="mt-1.5 h-3.5 w-3.5 shrink-0 text-faint" />
+                )}
+              </ActivityLink>
             </li>
           )
         })}

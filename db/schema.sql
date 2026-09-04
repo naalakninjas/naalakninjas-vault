@@ -84,10 +84,17 @@ CREATE TABLE IF NOT EXISTS repayments (
 );
 
 -- Append-only audit log. Written by triggers, never by the app directly.
+--
+-- `mission_id` is the request an entry is about, where it is about one. The
+-- feed uses it to link an entry through to the request, which the message
+-- alone could not support: "Mission #12 approved" made the reader go and find
+-- #12 by hand. Nulled rather than cascaded on delete, because withdrawing a
+-- request must not erase the record that it existed.
 CREATE TABLE IF NOT EXISTS activity (
     id           SERIAL PRIMARY KEY,
     message      TEXT NOT NULL,
     member_id    INTEGER REFERENCES members(id) ON DELETE SET NULL,
+    mission_id   INTEGER REFERENCES missions(id) ON DELETE SET NULL,
     action_type  VARCHAR(50),
     created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -151,6 +158,10 @@ ALTER TABLE vault_settings ADD COLUMN IF NOT EXISTS description TEXT;
 -- Runs recorded before the Run now button existed were all cron runs, which
 -- is exactly what the default backfills them as.
 ALTER TABLE keep_alive_runs ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'cron';
+
+-- Entries written before the feed could link stay unlinked; there is no
+-- reliable way to recover which request an old free-text message referred to.
+ALTER TABLE activity ADD COLUMN IF NOT EXISTS mission_id INTEGER REFERENCES missions(id) ON DELETE SET NULL;
 
 -- An early revision made (member_id, month, year) unique on contributions,
 -- which blocked split payments. Drop it if this project still has it.
@@ -276,17 +287,26 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Single entry point for the audit log, so trigger bodies stay readable.
+--
+-- `p_mission_id` is last and defaulted so the existing three-argument calls
+-- still resolve to this one function.
 CREATE OR REPLACE FUNCTION add_activity(
     p_message      TEXT,
     p_member_id    INTEGER DEFAULT NULL,
-    p_action_type  VARCHAR(50) DEFAULT NULL
+    p_action_type  VARCHAR(50) DEFAULT NULL,
+    p_mission_id   INTEGER DEFAULT NULL
 )
 RETURNS VOID AS $$
 BEGIN
-    INSERT INTO activity (message, member_id, action_type)
-    VALUES (p_message, p_member_id, p_action_type);
+    INSERT INTO activity (message, member_id, action_type, mission_id)
+    VALUES (p_message, p_member_id, p_action_type, p_mission_id);
 END;
 $$ LANGUAGE plpgsql;
+
+-- Older revisions had a three-argument add_activity. Postgres treats the
+-- four-argument version as a separate overload rather than replacing it, and
+-- the two are ambiguous for a three-argument call, so the old one must go.
+DROP FUNCTION IF EXISTS add_activity(TEXT, INTEGER, VARCHAR);
 
 
 -- ----------------------------------------------------------------------------
@@ -431,6 +451,26 @@ SELECT
 FROM missions m
 JOIN members mb ON mb.id = m.member_id;
 
+-- The most recent successful sign-in per ninja, however long ago it was.
+--
+-- The Vault Status panel used to answer "who has been in the vault" from the
+-- last 40 events alone, which quietly excluded anyone who signs in rarely: a
+-- session is kept in localStorage and never expires, so a ninja who set their
+-- PIN on their phone months ago has exactly one event, and forty sign-ins from
+-- somebody else's laptop are enough to bury it. This makes each ninja's last
+-- visit independent of how busy everyone else has been.
+--
+-- Successes only. A failed attempt is not a visit, and the event list below it
+-- in the panel still shows those.
+CREATE OR REPLACE VIEW v_last_sign_in AS
+SELECT DISTINCT ON (member_id)
+    member_id,
+    created_at,
+    user_agent
+FROM login_events
+WHERE succeeded AND member_id IS NOT NULL
+ORDER BY member_id, created_at DESC;
+
 
 -- ============================================================================
 -- 6. TRIGGER FUNCTIONS
@@ -478,7 +518,8 @@ BEGIN
         (SELECT name FROM members WHERE id = NEW.member_id) ||
             ' requested ₹' || NEW.amount || ' for: ' || NEW.reason,
         NEW.member_id,
-        'mission_created'
+        'mission_created',
+        NEW.id
     );
 
     RETURN NEW;
@@ -546,6 +587,58 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Describes a request the way the feed refers to it: "Sudeep's ₹2,50,000
+-- request". Amounts are left as raw numerics because the client reformats
+-- every ₹ figure in a message with the app's own money format.
+-- Local names are prefixed to keep them clear of the column names in the
+-- query: plpgsql substitutes variables into SQL, and a variable called
+-- `amount` sitting next to a column called `amount` is how that goes wrong.
+CREATE OR REPLACE FUNCTION describe_mission(p_mission_id INTEGER)
+RETURNS TEXT AS $$
+DECLARE
+    v_requester TEXT;
+    v_amount    DECIMAL(10,2);
+BEGIN
+    SELECT members.name, missions.amount
+      INTO v_requester, v_amount
+      FROM missions
+      LEFT JOIN members ON members.id = missions.member_id
+     WHERE missions.id = p_mission_id;
+
+    IF v_amount IS NULL THEN
+        RETURN 'a request';
+    END IF;
+
+    RETURN COALESCE(v_requester, 'a ninja') || '''s ₹' || v_amount || ' request';
+END;
+$$ LANGUAGE plpgsql;
+
+-- Every vote as it is cast, not just the one that tips the balance.
+--
+-- The feed previously jumped from "Sudeep requested …" straight to "approved
+-- with 3 votes", so there was no way to see who had already voted without
+-- opening the request. Fires on a changed vote too, which is a real event: the
+-- upsert on (mission_id, member_id) means a ninja can switch sides.
+CREATE OR REPLACE FUNCTION log_vote()
+RETURNS TRIGGER AS $$
+DECLARE
+    voter_name TEXT;
+BEGIN
+    SELECT name INTO voter_name FROM members WHERE id = NEW.member_id;
+
+    PERFORM add_activity(
+        COALESCE(voter_name, 'A ninja') ||
+            CASE WHEN NEW.vote = 'approve' THEN ' approved ' ELSE ' rejected ' END ||
+            describe_mission(NEW.mission_id),
+        NEW.member_id,
+        CASE WHEN NEW.vote = 'approve' THEN 'vote_approve' ELSE 'vote_reject' END,
+        NEW.mission_id
+    );
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Promote a mission once the vote threshold is reached.
 CREATE OR REPLACE FUNCTION update_mission_status()
 RETURNS TRIGGER AS $$
@@ -553,6 +646,7 @@ DECLARE
     approvals          INTEGER;
     rejections         INTEGER;
     required_approvals INTEGER;
+    promoted           INTEGER;
 BEGIN
     SELECT value::INTEGER INTO required_approvals
     FROM vault_settings
@@ -571,11 +665,20 @@ BEGIN
            SET status = 'approved', approved_at = NOW()
          WHERE id = NEW.mission_id AND status = 'pending';
 
-        PERFORM add_activity(
-            'Mission #' || NEW.mission_id || ' approved with ' || approvals || ' votes',
-            NULL,
-            'mission_approved'
-        );
+        -- Only announce a status change that actually happened. The threshold
+        -- stays met for every later vote, so an unconditional log would
+        -- re-announce the approval each time somebody changed their mind.
+        GET DIAGNOSTICS promoted = ROW_COUNT;
+
+        IF promoted > 0 THEN
+            PERFORM add_activity(
+                describe_mission(NEW.mission_id) || ' was approved with ' ||
+                    approvals || ' votes',
+                NULL,
+                'mission_approved',
+                NEW.mission_id
+            );
+        END IF;
     END IF;
 
     -- With four members and three approvals needed, two rejections make
@@ -585,11 +688,17 @@ BEGIN
            SET status = 'rejected', rejected_at = NOW()
          WHERE id = NEW.mission_id AND status = 'pending';
 
-        PERFORM add_activity(
-            'Mission #' || NEW.mission_id || ' rejected with ' || rejections || ' votes',
-            NULL,
-            'mission_rejected'
-        );
+        GET DIAGNOSTICS promoted = ROW_COUNT;
+
+        IF promoted > 0 THEN
+            PERFORM add_activity(
+                describe_mission(NEW.mission_id) || ' was rejected with ' ||
+                    rejections || ' votes',
+                NULL,
+                'mission_rejected',
+                NEW.mission_id
+            );
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -722,16 +831,18 @@ BEGIN
         member_name || ' repaid ₹' || NEW.amount ||
             ' (total ₹' || total_repaid || ' of ₹' || mission_amount || ')',
         NEW.member_id,
-        'repayment_added'
+        'repayment_added',
+        NEW.mission_id
     );
 
     IF total_repaid >= mission_amount THEN
         UPDATE missions SET status = 'repaid' WHERE id = NEW.mission_id;
 
         PERFORM add_activity(
-            'Mission #' || NEW.mission_id || ' fully repaid by ' || member_name,
+            member_name || ' fully repaid their ₹' || mission_amount || ' request',
             NEW.member_id,
-            'mission_repaid'
+            'mission_repaid',
+            NEW.mission_id
         );
     END IF;
 
@@ -768,6 +879,29 @@ DROP TRIGGER IF EXISTS trigger_prevent_self_vote ON votes;
 CREATE TRIGGER trigger_prevent_self_vote
     BEFORE INSERT OR UPDATE ON votes
     FOR EACH ROW EXECUTE FUNCTION prevent_self_vote();
+
+-- Both named to sort before trigger_update_mission_status, so the individual
+-- vote is logged before the approval it triggers. Postgres fires same-timing
+-- triggers in name order, and both rows share the transaction timestamp, so
+-- this is what puts them in a sensible order in the feed.
+--
+-- Split in two because a WHEN clause cannot test TG_OP, and OLD does not exist
+-- for an INSERT — so "new vote, or a vote that actually changed" has to be
+-- expressed as two triggers over the one function.
+DROP TRIGGER IF EXISTS trigger_log_vote ON votes;
+DROP TRIGGER IF EXISTS trigger_log_vote_cast ON votes;
+CREATE TRIGGER trigger_log_vote_cast
+    AFTER INSERT ON votes
+    FOR EACH ROW EXECUTE FUNCTION log_vote();
+
+-- A ninja switching sides is a real event and worth a line. Re-saving the same
+-- vote is not, hence IS DISTINCT FROM.
+DROP TRIGGER IF EXISTS trigger_log_vote_changed ON votes;
+CREATE TRIGGER trigger_log_vote_changed
+    AFTER UPDATE OF vote ON votes
+    FOR EACH ROW
+    WHEN (OLD.vote IS DISTINCT FROM NEW.vote)
+    EXECUTE FUNCTION log_vote();
 
 DROP TRIGGER IF EXISTS trigger_update_mission_status ON votes;
 CREATE TRIGGER trigger_update_mission_status
@@ -930,11 +1064,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;
 
 GRANT SELECT ON v_mission_summary TO anon;
+GRANT SELECT ON v_last_sign_in    TO anon;
 
 GRANT EXECUTE ON FUNCTION get_vault_balance()                        TO anon;
 GRANT EXECUTE ON FUNCTION get_available_balance()                    TO anon;
 GRANT EXECUTE ON FUNCTION edit_window_hours()                        TO anon;
-GRANT EXECUTE ON FUNCTION add_activity(TEXT, INTEGER, VARCHAR)       TO anon;
+GRANT EXECUTE ON FUNCTION add_activity(TEXT, INTEGER, VARCHAR, INTEGER) TO anon;
+GRANT EXECUTE ON FUNCTION describe_mission(INTEGER)                  TO anon;
 
 GRANT EXECUTE ON FUNCTION member_pin_status()                        TO anon;
 GRANT EXECUTE ON FUNCTION verify_member_pin(INTEGER, TEXT)           TO anon;
@@ -980,7 +1116,44 @@ END $$;
 
 
 -- ============================================================================
--- 10. VERIFY
+-- 10. REALTIME
+--
+-- The app subscribes to changes on these tables so a vote or a contribution
+-- entered on one phone appears on the others without anyone reloading.
+--
+-- Supabase publishes changes through the `supabase_realtime` publication, and
+-- a table not in it emits nothing. Each is added only if absent, because
+-- ALTER PUBLICATION ... ADD TABLE errors on a table already published and
+-- this file is meant to be re-runnable.
+--
+-- `login_events` and `keep_alive_runs` are deliberately left out: the Vault
+-- Status panel reads them when opened, and neither needs to interrupt anyone.
+-- ============================================================================
+
+DO $$
+DECLARE
+    target TEXT;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        RAISE NOTICE 'supabase_realtime publication not found; skipping realtime setup';
+        RETURN;
+    END IF;
+
+    FOREACH target IN ARRAY ARRAY['activity', 'contributions', 'missions', 'votes', 'repayments'] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_publication_tables
+             WHERE pubname = 'supabase_realtime'
+               AND schemaname = 'public'
+               AND tablename = target
+        ) THEN
+            EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', target);
+        END IF;
+    END LOOP;
+END $$;
+
+
+-- ============================================================================
+-- 11. VERIFY
 -- ============================================================================
 
 SELECT 'Schema applied.'                        AS status,

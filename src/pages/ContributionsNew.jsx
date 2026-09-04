@@ -26,6 +26,7 @@ import {
   isWithinEditWindow,
   readEditWindowHours
 } from '../utils/editWindow'
+import { useLiveRefresh } from '../hooks/useLiveRefresh'
 import ContributionForm from '../components/ContributionForm'
 
 const ContributionsPage = () => {
@@ -52,6 +53,10 @@ const ContributionsPage = () => {
     loadData()
   }, [selectedMonth, selectedYear])
 
+  // The monthly progress bar counts everyone's deposits, so somebody else
+  // logging one changes what this page should be showing.
+  useLiveRefresh(['contributions'], () => loadData({ quiet: true }))
+
   // Opened straight from a dashboard quick action. The state is cleared so a
   // refresh or back-navigation does not reopen the form.
   useEffect(() => {
@@ -61,7 +66,7 @@ const ContributionsPage = () => {
     }
   }, [location, navigate])
 
-  const loadData = async () => {
+  const loadData = async ({ quiet = false } = {}) => {
     try {
       const [contributionsData, settings] = await Promise.all([
         dbService.getContributions(),
@@ -80,7 +85,11 @@ const ContributionsPage = () => {
       setEditWindowHours(readEditWindowHours(settings))
     } catch (error) {
       console.error('Error loading contributions:', error)
-      setContributions([])
+
+      // Only clear the table when the reader is waiting on this load anyway.
+      // A failed background reload keeps the rows that are already there
+      // rather than showing an empty vault because one request timed out.
+      if (!quiet) setContributions([])
     } finally {
       setLoading(false)
     }

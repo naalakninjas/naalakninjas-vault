@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LifeBuoy, ThumbsUp, Wallet, RefreshCw, AlertCircle } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { dbService } from '../services/supabase'
+import { useLiveRefresh } from '../hooks/useLiveRefresh'
 import BalancePanel from '../components/dashboard/BalancePanel'
 import QuickActions from '../components/dashboard/QuickActions'
 import StatGrid from '../components/dashboard/StatGrid'
@@ -58,13 +60,17 @@ const countAwaitingVote = (missions = [], votedMissionIds, memberId) =>
 
 const Dashboard = () => {
   const { currentNinja, ninjas } = useAuth()
+  const navigate = useNavigate()
   const [data, setData] = useState(EMPTY)
   const [settings, setSettings] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [showHistory, setShowHistory] = useState(false)
 
-  const load = useCallback(async (signal) => {
-    setStatus('loading')
+  // `quiet` keeps the skeleton away on a background reload. A live update is
+  // not something the reader asked for, and blanking the numbers they were
+  // looking at to re-show them a moment later reads as a glitch.
+  const load = useCallback(async (signal, { quiet = false } = {}) => {
+    if (!quiet) setStatus('loading')
 
     try {
       // Settings and votes are non-critical: fall back rather than failing the
@@ -110,6 +116,12 @@ const Dashboard = () => {
     } catch (error) {
       if (signal?.aborted) return
       console.error('Failed to load dashboard:', error)
+
+      // A background reload that fails leaves what is already on screen. It
+      // is a few seconds stale at worst, which beats replacing a working
+      // dashboard with an error over a hiccup nobody asked to trigger.
+      if (quiet) return
+
       setData(EMPTY)
       setStatus('error')
     }
@@ -120,6 +132,16 @@ const Dashboard = () => {
     load(controller.signal)
     return () => controller.abort()
   }, [load])
+
+  // Every figure on this screen is derived from these tables, so any change to
+  // one of them dates the whole dashboard.
+  useLiveRefresh(['contributions', 'missions', 'votes', 'repayments', 'activity'], () =>
+    load(undefined, { quiet: true })
+  )
+
+  // Activity entries about a request open that request.
+  const openMission = (missionId) =>
+    navigate('/missions', { state: { openMissionId: missionId } })
 
   if (status === 'loading') {
     return <DashboardSkeleton />
@@ -215,6 +237,7 @@ const Dashboard = () => {
             <ActivityFeed
               activities={data.recentActivity}
               onViewAll={() => setShowHistory(true)}
+              onOpenMission={openMission}
             />
           </div>
           <div className="lg:col-span-2">
@@ -230,6 +253,10 @@ const Dashboard = () => {
       <ActivityHistoryModal
         isOpen={showHistory}
         onClose={() => setShowHistory(false)}
+        onOpenMission={(missionId) => {
+          setShowHistory(false)
+          openMission(missionId)
+        }}
       />
     </div>
   )

@@ -7,8 +7,12 @@ import Settings from './pages/SettingsNew'
 import Layout from './components/LayoutNew'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
+import { useDeploymentRefresh } from './hooks/useDeploymentRefresh'
 
 function App() {
+  // Mounted once here rather than per page, so the check survives navigation.
+  useDeploymentRefresh()
+
   return (
     <AuthProvider>
       <Router>

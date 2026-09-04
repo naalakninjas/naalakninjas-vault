@@ -2,10 +2,13 @@ import { formatDistanceToNow } from 'date-fns'
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  CheckCircle2,
   LifeBuoy,
   LogIn,
+  ThumbsDown,
   ThumbsUp,
   Trash2,
+  XCircle,
   Activity as ActivityIcon
 } from 'lucide-react'
 import { formatMoney } from './format'
@@ -27,6 +30,18 @@ export const presentation = (actionType = '') => {
   }
   if (type.includes('repay')) {
     return { icon: ArrowUpRight, accent: '#3B82F6' }
+  }
+  // A single ninja's vote, then the outcome it produced. Checked before the
+  // generic 'vote' and 'mission' cases, which would flatten approve and reject
+  // into one indistinguishable icon.
+  if (type === 'mission_approved') {
+    return { icon: CheckCircle2, accent: '#10B981' }
+  }
+  if (type === 'mission_rejected') {
+    return { icon: XCircle, accent: '#F87171' }
+  }
+  if (type.includes('vote_reject')) {
+    return { icon: ThumbsDown, accent: '#F87171' }
   }
   if (type.includes('vote')) {
     return { icon: ThumbsUp, accent: '#F59E0B' }

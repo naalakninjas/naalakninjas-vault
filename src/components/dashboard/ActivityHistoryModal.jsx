@@ -6,6 +6,7 @@ import {
   presentation,
   tidyMessage
 } from '../../utils/activityPresentation'
+import ActivityLink from './ActivityLink'
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -41,7 +42,7 @@ const dayHeading = (date) =>
  * and a bare list of relative times ("3 days ago") answers it poorly once you
  * are looking back over weeks.
  */
-const ActivityHistoryModal = ({ isOpen, onClose }) => {
+const ActivityHistoryModal = ({ isOpen, onClose, onOpenMission }) => {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
@@ -195,21 +196,27 @@ const ActivityHistoryModal = ({ isOpen, onClose }) => {
                     const { icon: Icon, accent } = presentation(entry.action_type)
 
                     return (
-                      <li key={entry.id} className="flex items-start gap-3 px-3.5 py-3">
-                        <span
-                          className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-                          style={{ background: `${accent}1F`, color: accent }}
+                      <li key={entry.id}>
+                        <ActivityLink
+                          missionId={entry.mission_id}
+                          onOpenMission={onOpenMission}
+                          className="flex items-start gap-3 px-3.5 py-3"
                         >
-                          <Icon className="h-3.5 w-3.5" />
-                        </span>
+                          <span
+                            className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                            style={{ background: `${accent}1F`, color: accent }}
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                          </span>
 
-                        <p className="min-w-0 flex-1 text-sm leading-snug text-strong">
-                          {tidyMessage(entry.message)}
-                        </p>
+                          <p className="min-w-0 flex-1 text-sm leading-snug text-strong">
+                            {tidyMessage(entry.message)}
+                          </p>
 
-                        <span className="numeric shrink-0 text-[11px] text-faint">
-                          {timeOfDay(entry.created_at)}
-                        </span>
+                          <span className="numeric shrink-0 text-[11px] text-faint">
+                            {timeOfDay(entry.created_at)}
+                          </span>
+                        </ActivityLink>
                       </li>
                     )
                   })}

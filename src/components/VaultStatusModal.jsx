@@ -17,38 +17,61 @@ const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 /**
  * Enough of the user agent to recognise your own phone, and no more.
  * Deliberately crude: this answers "was that me?", it is not analytics.
+ *
+ * iOS is checked before the desktop patterns throughout. Every browser on
+ * iPhone is WebKit underneath and carries `Safari/` plus a `Mobile/` token in
+ * its agent, so a plain `Chrome/`-then-`Safari/` chain reports Chrome for
+ * iPhone as Safari. The iOS builds identify themselves with their own tokens —
+ * CriOS, FxiOS, EdgiOS, OPT — which have to be matched first.
  */
 const describeDevice = (userAgent) => {
   if (!userAgent) return 'Unknown device'
 
-  const browser = /Edg\//.test(userAgent)
-    ? 'Edge'
-    : /OPR\//.test(userAgent)
-      ? 'Opera'
-      : /Chrome\//.test(userAgent)
-        ? 'Chrome'
-        : /Firefox\//.test(userAgent)
-          ? 'Firefox'
-          : /Safari\//.test(userAgent)
-            ? 'Safari'
-            : null
+  const browser = /CriOS\//.test(userAgent)
+    ? 'Chrome'
+    : /FxiOS\//.test(userAgent)
+      ? 'Firefox'
+      : /EdgiOS\//.test(userAgent)
+        ? 'Edge'
+        : /(OPT|OPiOS)\//.test(userAgent)
+          ? 'Opera'
+          : /Edg\//.test(userAgent)
+            ? 'Edge'
+            : /OPR\//.test(userAgent)
+              ? 'Opera'
+              : /SamsungBrowser\//.test(userAgent)
+                ? 'Samsung Internet'
+                : /Chrome\//.test(userAgent)
+                  ? 'Chrome'
+                  : /Firefox\//.test(userAgent)
+                    ? 'Firefox'
+                    : /Safari\//.test(userAgent)
+                      ? 'Safari'
+                      : null
 
+  // `Macintosh` with a touch point is an iPad: since iPadOS 13 it asks for
+  // desktop sites by default and sends a Mac agent, which otherwise files
+  // every iPad under "Mac".
   const platform = /iPhone/.test(userAgent)
     ? 'iPhone'
-    : /iPad/.test(userAgent)
+    : /iPad/.test(userAgent) || (/Macintosh/.test(userAgent) && /Mobile\//.test(userAgent))
       ? 'iPad'
       : /Android/.test(userAgent)
         ? 'Android'
         : /Windows/.test(userAgent)
           ? 'Windows'
-          : /Mac OS X/.test(userAgent)
+          : /Mac OS X|Macintosh/.test(userAgent)
             ? 'Mac'
             : /Linux/.test(userAgent)
               ? 'Linux'
               : null
 
   if (browser && platform) return `${browser} on ${platform}`
-  return browser || platform || 'Unknown device'
+
+  // Falling back to a trimmed agent rather than "Unknown device": an
+  // unrecognised sign-in is exactly the one worth being able to identify, and
+  // a label of "Unknown" throws away the only evidence there is.
+  return browser || platform || userAgent.slice(0, 40)
 }
 
 /**
@@ -144,7 +167,63 @@ const Legend = () => (
   </div>
 )
 
-const SignInList = ({ events }) => {
+/**
+ * Where each ninja was last seen, all four listed whether they have signed in
+ * recently or not.
+ *
+ * Sessions never expire, so someone who set their PIN on their phone months
+ * ago and stayed signed in has one sign-in event and would otherwise be absent
+ * from this panel entirely — which reads as "they have never been here".
+ */
+const LastSeen = ({ lastSignIns }) => {
+  const byMember = new Map(lastSignIns.map((row) => [row.member_id, row]))
+
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-faint">
+        Last seen
+      </h3>
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {ninjas.map((ninja) => {
+          const seen = byMember.get(ninja.id)
+
+          return (
+            <div
+              key={ninja.id}
+              className="flex items-center gap-2.5 rounded-lg border border-[color:var(--line-subtle)] px-3 py-2"
+            >
+              <Avatar
+                src={ninja.avatar}
+                name={ninja.name}
+                size="sm"
+                borderColor={getNinjaBorderColor(ninja)}
+              />
+
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-strong">{ninja.name}</p>
+                <p className="truncate text-[11px] text-faint">
+                  {seen ? describeDevice(seen.user_agent) : 'Has not signed in yet'}
+                </p>
+              </div>
+
+              {seen && (
+                <p
+                  className="shrink-0 text-[11px] text-muted"
+                  title={formatDateTime(seen.created_at)}
+                >
+                  {formatRelative(seen.created_at)}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const SignInList = ({ events, lastSignIns }) => {
   if (events.length === 0) {
     return (
       <EmptyState
@@ -156,42 +235,52 @@ const SignInList = ({ events }) => {
   }
 
   return (
-    <div className="divide-y divide-[color:var(--line-subtle)]">
-      {events.map((event) => {
-        const name = event.members?.name
-        const ninja = getNinjaByName(name, ninjas)
+    <div className="space-y-4">
+      <LastSeen lastSignIns={lastSignIns} />
 
-        return (
-          <div key={event.id} className="flex items-center gap-3 py-3">
-            <Avatar
-              src={ninja?.avatar}
-              name={name}
-              size="sm"
-              borderColor={getNinjaBorderColor(ninja)}
-            />
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-faint">
+          Recent attempts
+        </h3>
 
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-strong">
-                {name || 'Unknown ninja'}
-              </p>
-              <p className="truncate text-xs text-faint">
-                {describeDevice(event.user_agent)}
-              </p>
-            </div>
+        <div className="divide-y divide-[color:var(--line-subtle)]">
+          {events.map((event) => {
+            const name = event.members?.name
+            const ninja = getNinjaByName(name, ninjas)
 
-            <div className="shrink-0 text-right">
-              <p className="text-xs text-muted" title={formatDateTime(event.created_at)}>
-                {formatRelative(event.created_at)}
-              </p>
-              {!event.succeeded && (
-                <Badge variant="danger" className="mt-1">
-                  Wrong PIN
-                </Badge>
-              )}
-            </div>
-          </div>
-        )
-      })}
+            return (
+              <div key={event.id} className="flex items-center gap-3 py-3">
+                <Avatar
+                  src={ninja?.avatar}
+                  name={name}
+                  size="sm"
+                  borderColor={getNinjaBorderColor(ninja)}
+                />
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-strong">
+                    {name || 'Unknown ninja'}
+                  </p>
+                  <p className="truncate text-xs text-faint">
+                    {describeDevice(event.user_agent)}
+                  </p>
+                </div>
+
+                <div className="shrink-0 text-right">
+                  <p className="text-xs text-muted" title={formatDateTime(event.created_at)}>
+                    {formatRelative(event.created_at)}
+                  </p>
+                  {!event.succeeded && (
+                    <Badge variant="danger" className="mt-1">
+                      Wrong PIN
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -368,6 +457,7 @@ const KeepAliveCalendar = ({ runs, onRun, running }) => {
 const VaultStatusModal = ({ isOpen, onClose }) => {
   const [tab, setTab] = useState('signins')
   const [logins, setLogins] = useState([])
+  const [lastSignIns, setLastSignIns] = useState([])
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -401,11 +491,21 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
     setLoading(true)
     setFailed(false)
 
-    Promise.all([dbService.getLoginEvents(), dbService.getKeepAliveRuns()])
-      .then(([loginData, runData]) => {
+    Promise.all([
+      dbService.getLoginEvents(),
+      dbService.getKeepAliveRuns(),
+      // Non-critical: without it the panel loses the per-ninja summary but the
+      // event list below still stands, which is how it behaved before.
+      dbService.getLastSignIns().catch((error) => {
+        console.warn('Could not load last sign-ins:', error.message)
+        return []
+      })
+    ])
+      .then(([loginData, runData, lastSeenData]) => {
         if (!active) return
         setLogins(loginData)
         setRuns(runData)
+        setLastSignIns(lastSeenData)
       })
       .catch((error) => {
         console.error('Could not load vault status:', error.message)
@@ -462,7 +562,7 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
             description="The database did not respond. Check your connection and try again."
           />
         ) : tab === 'signins' ? (
-          <SignInList events={logins} />
+          <SignInList events={logins} lastSignIns={lastSignIns} />
         ) : (
           <KeepAliveCalendar runs={runs} onRun={handleRun} running={running} />
         )}

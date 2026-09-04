@@ -135,6 +135,31 @@ treated as disbursed. At two rejections approval is unreachable, so it flips to
 rejected. Votes are final. Any ninja can share a pending request to WhatsApp to
 nudge the others into voting.
 
+Each vote lands in the activity feed as it is cast — "Shilpha approved Sudeep's
+₹50,000 request" — alongside the outcome it eventually produces. Any feed entry
+about a request opens that request when tapped, so you can go from a vote to
+what was voted on without hunting for it.
+
+**Staying current.** Four people share one vault, so a screen left open goes
+stale. The dashboard, requests and contributions pages subscribe to Supabase
+Realtime and reload themselves when the tables behind them change, and also
+reload when the tab regains focus in case the socket did not survive — a
+blocked websocket or a laptop waking from sleep. Nothing needs a manual
+refresh.
+
+That covers the data but not the app itself. A deployment cannot reach into an
+open tab: the browser keeps running the bundle it already downloaded, and
+nobody closes tabs on a phone, so a ninja could sit on a build from last week
+while the numbers on screen stay perfectly current. `useDeploymentRefresh`
+compares the bundle filename this tab is running against the one `index.html`
+now names — the content hash *is* the version, so there is no version file to
+keep in step — and reloads when they differ.
+
+It waits for a moment that costs nothing: never while a modal is open or a
+field is focused, since throwing away a half-typed contribution to deliver an
+update nobody asked for is a bad trade. The reload is deferred, not dropped,
+and goes through on the next check once the way is clear.
+
 **Corrections.** For `edit_window_hours` after making an entry, a ninja can edit
 or delete their own contribution, and withdraw their own request while it is
 still pending or rejected. After that the row is read-only for everyone — a
@@ -199,7 +224,7 @@ components, and the originals are gone.
 
 ## Database
 
-Seven tables:
+Nine tables:
 
 | Table | Holds |
 | --- | --- |
@@ -208,11 +233,17 @@ Seven tables:
 | `missions` | Emergency requests: `pending` → `approved`/`rejected` → `repaid` |
 | `votes` | One vote per member per mission |
 | `repayments` | Payments against a mission |
-| `activity` | Append-only audit log, written by triggers |
+| `activity` | Append-only audit log, written by triggers. `mission_id` links an entry to the request it is about |
+| `login_events` | Every sign-in attempt, written by `verify_member_pin()` |
+| `keep_alive_runs` | One row per keep-alive ping, cron or manual |
 | `vault_settings` | The business rules above, as key/value rows |
 
-One view backs a read path: `v_mission_summary`, which folds vote tallies and
-repayment progress into each mission row so one row renders a card.
+Two views back read paths. `v_mission_summary` folds vote tallies and repayment
+progress into each mission row, so one row renders a card. `v_last_sign_in`
+picks each ninja's most recent successful sign-in, which the recent-events
+window cannot show: sessions never expire, so a ninja who signed in once on
+their phone has a single event that later sign-ins from anyone else will
+eventually push out of view.
 
 Two functions are called over RPC: `get_vault_balance()` and
 `get_available_balance()`. `src/services/supabase.js` can compute both

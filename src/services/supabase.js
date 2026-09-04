@@ -247,7 +247,12 @@ export const dbService = {
         *,
         members(name, color)
       `)
+      // `created_at` defaults to NOW(), which in Postgres is the transaction
+      // timestamp — so a vote and the approval it triggers carry the identical
+      // time. Falling back to id keeps them in the order they happened rather
+      // than an arbitrary one.
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(limit)
 
     if (error) throw error
@@ -268,6 +273,24 @@ export const dbService = {
       `)
       .order('created_at', { ascending: false })
       .limit(limit)
+
+    if (error) throw error
+    return data ?? []
+  },
+
+  /**
+   * Each ninja's most recent successful sign-in, regardless of how far back it
+   * was. `getLoginEvents` returns a fixed recent window, which leaves out
+   * anyone whose only sign-in has since been pushed past it — a phone that
+   * signed in once and kept its session.
+   *
+   * Read from a view rather than derived here: PostgREST cannot express one
+   * row per member, and fetching enough events to be sure would be a guess.
+   */
+  async getLastSignIns() {
+    const { data, error } = await supabase
+      .from('v_last_sign_in')
+      .select('member_id, created_at, user_agent')
 
     if (error) throw error
     return data ?? []
@@ -340,6 +363,7 @@ export const dbService = {
       .gte('created_at', from.toISOString())
       .lt('created_at', to.toISOString())
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(limit)
 
     if (error) throw error

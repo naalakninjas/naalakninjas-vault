@@ -26,6 +26,7 @@ import {
   readEditWindowHours
 } from '../utils/editWindow'
 import { buildVoteReminder, shareOnWhatsApp } from '../utils/share'
+import { useLiveRefresh } from '../hooks/useLiveRefresh'
 import MissionForm from '../components/MissionForm'
 import RepaymentForm from '../components/RepaymentForm'
 
@@ -383,6 +384,10 @@ const MissionsPage = () => {
     loadMissions()
   }, [])
 
+  // Votes land here from other people's phones, and a vote can flip a request
+  // to approved while this page is open.
+  useLiveRefresh(['missions', 'votes', 'repayments'], () => loadMissions({ quiet: true }))
+
   // Non-critical: the window falls back to 24 hours and the reminder text
   // simply omits the target count, so a failure here must not blank the page.
   useEffect(() => {
@@ -408,10 +413,38 @@ const MissionsPage = () => {
     }
   }, [location, navigate])
 
-  const loadMissions = async () => {
+  // Followed from an activity entry. Waits for the list, since the details
+  // modal is driven by a mission object rather than an id — and says so when
+  // the request has since been withdrawn, instead of doing nothing.
+  useEffect(() => {
+    const targetId = location.state?.openMissionId
+    if (!targetId || missions.length === 0) return
+
+    const match = missions.find((mission) => mission.id === targetId)
+
+    if (match) {
+      setSelectedMission(match)
+      setShowDetails(true)
+    } else {
+      showWarning('That request is no longer in the vault')
+    }
+
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location, navigate, missions])
+
+  const loadMissions = async ({ quiet = false } = {}) => {
     try {
       const missionsData = await dbService.getMissions()
       setMissions(missionsData || [])
+
+      // Re-point an open details modal at the fresh row. It renders a mission
+      // object rather than an id, so without this a vote arriving while
+      // somebody has the request open would leave them reading a frozen copy.
+      setSelectedMission((current) =>
+        current
+          ? (missionsData || []).find((mission) => mission.id === current.id) ?? current
+          : current
+      )
 
       // Vote lookups run in parallel; serialising them made load time scale
       // with the number of missions.
@@ -431,6 +464,12 @@ const MissionsPage = () => {
       )
     } catch (error) {
       console.error('Error loading missions:', error)
+
+      // A failed background reload leaves the requests already on screen.
+      // Emptying the list under someone who is mid-vote would be worse than
+      // showing them data a few seconds old.
+      if (quiet) return
+
       setMissions([])
       setUserVotes([])
     } finally {
