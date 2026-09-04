@@ -336,6 +336,59 @@ AS $$
     SELECT id, pin_hash IS NOT NULL FROM members ORDER BY id;
 $$;
 
+-- Reads the browser user agent from the PostgREST request headers.
+-- Header keys vary by client (`user-agent` vs `User-Agent`), so both are
+-- tried. Returns NULL when the function is called from SQL directly.
+CREATE OR REPLACE FUNCTION request_user_agent()
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    headers JSON;
+BEGIN
+    BEGIN
+        headers := NULLIF(current_setting('request.headers', true), '')::json;
+        RETURN COALESCE(headers ->> 'user-agent', headers ->> 'User-Agent');
+    EXCEPTION WHEN OTHERS THEN
+        RETURN NULL;
+    END;
+END;
+$$;
+
+-- Records that a ninja opened the vault on this device without re-entering a
+-- PIN. Sessions live in localStorage and never expire, so a phone that signed
+-- in once months ago never hit verify_member_pin again — Last seen had nothing
+-- new to show even though they use the app every day.
+--
+-- Called once per browser session from the app. Skips if the same member was
+-- already logged from the same user agent within the last four hours, so
+-- navigating between pages does not flood the table.
+CREATE OR REPLACE FUNCTION touch_sign_in(p_member_id INTEGER)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+    agent TEXT := request_user_agent();
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM login_events
+         WHERE member_id = p_member_id
+           AND succeeded
+           AND user_agent IS NOT DISTINCT FROM agent
+           AND created_at > NOW() - INTERVAL '4 hours'
+    ) THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO login_events (member_id, succeeded, user_agent)
+    VALUES (p_member_id, true, agent);
+END;
+$$;
+
 -- A missing hash returns false rather than raising: "nobody has claimed this
 -- ninja yet" is a normal state, and the caller routes to setup instead.
 --
@@ -351,20 +404,11 @@ AS $$
 DECLARE
     stored  TEXT;
     matched BOOLEAN;
-    agent   TEXT;
+    agent   TEXT := request_user_agent();
 BEGIN
     SELECT pin_hash INTO stored FROM members WHERE id = p_member_id;
 
     matched := stored IS NOT NULL AND stored = crypt(p_pin, stored);
-
-    -- PostgREST exposes the request headers as a setting. Absent when the
-    -- function is called straight from SQL, and malformed if something else
-    -- has set it, so neither case is allowed to fail the sign-in.
-    BEGIN
-        agent := NULLIF(current_setting('request.headers', true), '')::json ->> 'user-agent';
-    EXCEPTION WHEN OTHERS THEN
-        agent := NULL;
-    END;
 
     INSERT INTO login_events (member_id, succeeded, user_agent)
     VALUES (p_member_id, matched, agent);
@@ -420,6 +464,16 @@ BEGIN
         p_member_id,
         'pin_updated'
     );
+
+    -- First PIN setup is the member's first authentication. The app calls
+    -- verify_member_pin right after, but if that second request fails on a
+    -- slow phone network the feed still says "set their PIN" while Last seen
+    -- stays empty — two separate RPCs, and only one needs to succeed for the
+    -- activity row to appear.
+    IF stored IS NULL THEN
+        INSERT INTO login_events (member_id, succeeded, user_agent)
+        VALUES (p_member_id, true, request_user_agent());
+    END IF;
 END;
 $$;
 
@@ -1143,6 +1197,7 @@ GRANT EXECUTE ON FUNCTION describe_mission(INTEGER)                  TO anon;
 
 GRANT EXECUTE ON FUNCTION member_pin_status()                        TO anon;
 GRANT EXECUTE ON FUNCTION verify_member_pin(INTEGER, TEXT)           TO anon;
+GRANT EXECUTE ON FUNCTION touch_sign_in(INTEGER)                   TO anon;
 GRANT EXECUTE ON FUNCTION set_member_pin(INTEGER, TEXT, TEXT)        TO anon;
 
 -- members.pin_hash must stay unreadable from the browser, and the blanket

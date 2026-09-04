@@ -175,14 +175,22 @@ const Legend = () => (
  * ago and stayed signed in has one sign-in event and would otherwise be absent
  * from this panel entirely — which reads as "they have never been here".
  */
-const LastSeen = ({ lastSignIns }) => {
-  const byMember = new Map(lastSignIns.map((row) => [row.member_id, row]))
+const LastSeen = ({ lastSignIns, loadFailed }) => {
+  const byMember = new Map(
+    lastSignIns.map((row) => [Number(row.member_id), row])
+  )
 
   return (
     <div>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-faint">
         Last seen
       </h3>
+
+      {loadFailed && (
+        <p className="mt-1 text-xs text-amber-400/90">
+          Could not load last-seen data — re-run <code className="text-amber-300">db/schema.sql</code> in Supabase.
+        </p>
+      )}
 
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         {ninjas.map((ninja) => {
@@ -223,7 +231,7 @@ const LastSeen = ({ lastSignIns }) => {
   )
 }
 
-const SignInList = ({ events, lastSignIns }) => {
+const SignInList = ({ events, lastSignIns, lastSeenLoadFailed }) => {
   if (events.length === 0) {
     return (
       <EmptyState
@@ -236,7 +244,7 @@ const SignInList = ({ events, lastSignIns }) => {
 
   return (
     <div className="space-y-4">
-      <LastSeen lastSignIns={lastSignIns} />
+      <LastSeen lastSignIns={lastSignIns} loadFailed={lastSeenLoadFailed} />
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-faint">
@@ -458,6 +466,7 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
   const [tab, setTab] = useState('signins')
   const [logins, setLogins] = useState([])
   const [lastSignIns, setLastSignIns] = useState([])
+  const [lastSeenLoadFailed, setLastSeenLoadFailed] = useState(false)
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -490,14 +499,14 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
     let active = true
     setLoading(true)
     setFailed(false)
+    setLastSeenLoadFailed(false)
 
     Promise.all([
       dbService.getLoginEvents(),
       dbService.getKeepAliveRuns(),
-      // Non-critical: without it the panel loses the per-ninja summary but the
-      // event list below still stands, which is how it behaved before.
       dbService.getLastSignIns().catch((error) => {
         console.warn('Could not load last sign-ins:', error.message)
+        setLastSeenLoadFailed(true)
         return []
       })
     ])
@@ -562,7 +571,11 @@ const VaultStatusModal = ({ isOpen, onClose }) => {
             description="The database did not respond. Check your connection and try again."
           />
         ) : tab === 'signins' ? (
-          <SignInList events={logins} lastSignIns={lastSignIns} />
+          <SignInList
+            events={logins}
+            lastSignIns={lastSignIns}
+            lastSeenLoadFailed={lastSeenLoadFailed}
+          />
         ) : (
           <KeepAliveCalendar runs={runs} onRun={handleRun} running={running} />
         )}

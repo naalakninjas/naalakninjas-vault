@@ -91,6 +91,17 @@ export const AuthProvider = ({ children }) => {
     }
   }, [])
 
+  // A saved session skips the PIN screen, so verify_member_pin never runs and
+  // Last seen would stay empty on phones that stay signed in. Touch once when
+  // this tab loads; the database dedupes repeat calls from the same device.
+  useEffect(() => {
+    if (!currentNinja?.id) return
+
+    dbService.touchSignIn(currentNinja.id).catch((error) => {
+      console.warn('Could not record session sign-in:', error.message)
+    })
+  }, [currentNinja?.id])
+
   /**
    * Whether a ninja has already claimed their PIN.
    *

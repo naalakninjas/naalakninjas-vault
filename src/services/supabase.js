@@ -54,6 +54,19 @@ export const dbService = {
   },
 
   /**
+   * Records that a signed-in ninja opened the app on this device without
+   * typing their PIN again. Sessions never expire, so this is what keeps
+   * iPhone Last seen up to date for ninjas who stay signed in.
+   */
+  async touchSignIn(memberId) {
+    const { error } = await supabase.rpc('touch_sign_in', {
+      p_member_id: memberId
+    })
+
+    if (error) throw error
+  },
+
+  /**
    * Sets a first PIN when `currentPin` is null, otherwise changes an existing
    * one. The database rejects a change whose current PIN does not match, so
    * callers must surface the error rather than assume success.
