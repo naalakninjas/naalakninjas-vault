@@ -18,24 +18,53 @@ const REASONS = {
   interest: ['Savings interest', 'Fixed deposit interest', 'Other']
 }
 
+/** Whether a preset reason covers this value, or it needs the 'Other' free-text field. */
+const isPresetReason = (kind, reason) => REASONS[kind].includes(reason)
+
+/**
+ * Builds the initial form state for a given adjustment, or the blank
+ * defaults when `adjustment` is null (logging a new one). A reason saved
+ * before today's preset list existed, or typed as something not on it, still
+ * needs to land in the free-text field rather than silently resetting to the
+ * first preset.
+ */
+const initialState = (adjustment) => {
+  if (!adjustment) {
+    return {
+      kind: 'fee',
+      reason: REASONS.fee[0],
+      customReason: '',
+      amount: '',
+      entry_date: today(),
+      notes: ''
+    }
+  }
+
+  const kind = adjustment.kind === 'interest' ? 'interest' : 'fee'
+  const matchesPreset = isPresetReason(kind, adjustment.reason)
+
+  return {
+    kind,
+    reason: matchesPreset ? adjustment.reason : 'Other',
+    customReason: matchesPreset ? '' : (adjustment.reason || ''),
+    amount: String(adjustment.amount ?? ''),
+    entry_date: adjustment.entry_date || today(),
+    notes: adjustment.notes || ''
+  }
+}
+
 /**
  * Logs a line from the bank statement that nobody in the squad requested — a
  * fee that shrinks the vault, or interest the bank credited that grows it.
+ * Pass `adjustment` to edit an existing entry instead of logging a new one.
  * Rendered inside a <Modal>, so it owns no overlay or title bar. See
  * log_bank_adjustment() in db/schema.sql for how this feeds the balance.
  */
-const BankAdjustmentForm = ({ onSubmit, onCancel }) => {
+const BankAdjustmentForm = ({ adjustment = null, onSubmit, onCancel }) => {
   const { currentNinja } = useAuth()
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState({})
-  const [formData, setFormData] = useState({
-    kind: 'fee',
-    reason: REASONS.fee[0],
-    customReason: '',
-    amount: '',
-    entry_date: today(),
-    notes: ''
-  })
+  const [formData, setFormData] = useState(() => initialState(adjustment))
 
   const isOther = formData.reason === 'Other'
 
@@ -79,7 +108,9 @@ const BankAdjustmentForm = ({ onSubmit, onCancel }) => {
     setSubmitting(true)
     try {
       await onSubmit({
-        member_id: currentNinja?.id,
+        // Editing keeps the original logger — this is a correction, not a
+        // claim that whoever fixed a typo is the one who noticed the charge.
+        member_id: adjustment ? adjustment.member_id : currentNinja?.id,
         kind: formData.kind,
         amount: num(formData.amount),
         reason: isOther ? formData.customReason.trim() : formData.reason,
@@ -188,7 +219,9 @@ const BankAdjustmentForm = ({ onSubmit, onCancel }) => {
 
       <div className="flex gap-3 pt-1">
         <Button type="submit" variant="primary" loading={submitting} className="flex-1">
-          {formData.kind === 'fee' ? 'Log fee' : 'Log interest'}
+          {adjustment
+            ? 'Save changes'
+            : formData.kind === 'fee' ? 'Log fee' : 'Log interest'}
         </Button>
         <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">
           Cancel

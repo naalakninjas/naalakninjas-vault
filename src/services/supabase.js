@@ -306,6 +306,17 @@ export const dbService = {
     return data[0]
   },
 
+  async updateBankAdjustment(id, adjustment) {
+    const { data, error } = await supabase
+      .from('bank_adjustments')
+      .update(adjustment)
+      .eq('id', id)
+      .select()
+
+    if (error) throw error
+    return data[0]
+  },
+
   async deleteBankAdjustment(id) {
     const { error } = await supabase
       .from('bank_adjustments')
@@ -591,6 +602,7 @@ export const dbService = {
       ['contributions', () => this.getContributions(), []],
       ['missions', () => this.getMissions(), []],
       ['repayments', () => this.getRepayments(), []],
+      ['bankAdjustments', () => this.getBankAdjustments(), []],
       ['memberTotals', () => this.getMemberTotals(), []],
       ['recentActivity', () => this.getActivity(5), []]
     ]
@@ -629,6 +641,7 @@ export const dbService = {
       pendingMissions: missions.filter((m) => m.status === 'pending').length,
       missions,
       repayments: resolved.repayments,
+      bankAdjustments: resolved.bankAdjustments,
       monthlyStatus: resolved.memberTotals,
       recentActivity: resolved.recentActivity
     }

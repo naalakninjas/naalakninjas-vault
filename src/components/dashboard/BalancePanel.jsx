@@ -56,11 +56,38 @@ const Metric = ({ label, value, tone = 'default' }) => {
   )
 }
 
+/**
+ * Fees and interest the bank adds without anyone requesting them, apart from
+ * what the squad actually contributed. Top-right of the headline so it reads
+ * as "here's what moved the balance besides us" at a glance, on phones too —
+ * flex-wrap keeps both pills from running off a narrow screen.
+ */
+const BankActivityBadges = ({ totalFees = 0, totalInterest = 0 }) => {
+  if (totalFees <= 0 && totalInterest <= 0) return null
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+      {totalInterest > 0 && (
+        <span className="numeric whitespace-nowrap rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+          +{formatMoney(totalInterest)} interest
+        </span>
+      )}
+      {totalFees > 0 && (
+        <span className="numeric whitespace-nowrap rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-400">
+          -{formatMoney(totalFees)} fees
+        </span>
+      )}
+    </div>
+  )
+}
+
 const BalancePanel = ({
   vaultBalance = 0,
   availableBalance = 0,
   outstandingAmount = 0,
-  lockedReserve = 0
+  lockedReserve = 0,
+  totalFees = 0,
+  totalInterest = 0
 }) => {
   const reserveIntact = vaultBalance >= lockedReserve
   const headroom = vaultBalance - lockedReserve
@@ -74,9 +101,12 @@ const BalancePanel = ({
     >
       {/* Headline number */}
       <div className="p-5 sm:p-6">
-        <p className="text-xs font-medium uppercase tracking-wide text-faint">
-          Total vault balance
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-faint">
+            Total vault balance
+          </p>
+          <BankActivityBadges totalFees={totalFees} totalInterest={totalInterest} />
+        </div>
 
         <p className="mt-2 text-[2.5rem] font-semibold leading-none text-strong sm:text-5xl">
           <AnimatedMoney value={vaultBalance} />

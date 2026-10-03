@@ -12,6 +12,7 @@ import {
   Percent,
   Clock,
   Landmark,
+  Edit,
   Trash2
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -382,8 +383,9 @@ const LockedOutSection = ({ candidates, onReset }) => {
  * the squad can see and manage the ledger entries behind that movement,
  * instead of the balance just quietly being different than everyone expected.
  */
-const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) => {
+const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onUpdate, onDelete }) => {
   const [showForm, setShowForm] = useState(false)
+  const [editingAdjustment, setEditingAdjustment] = useState(null)
 
   const totalFees = adjustments
     .filter((a) => a.kind === 'fee')
@@ -391,6 +393,11 @@ const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) 
   const totalInterest = adjustments
     .filter((a) => a.kind === 'interest')
     .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
+
+  const closeForm = () => {
+    setShowForm(false)
+    setEditingAdjustment(null)
+  }
 
   const renderActions = (adjustment) => {
     if (!isWithinEditWindow(adjustment.created_at, editWindowHours)) {
@@ -405,15 +412,28 @@ const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) 
     }
 
     return (
-      <button
-        type="button"
-        onClick={() => onDelete(adjustment)}
-        className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
-        title={`Can be removed for ${editWindowRemaining(adjustment.created_at, editWindowHours)}`}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-        Remove
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => {
+            setEditingAdjustment(adjustment)
+            setShowForm(true)
+          }}
+          className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted transition-colors hover:bg-[color:var(--surface-hover)] hover:text-strong"
+        >
+          <Edit className="h-3.5 w-3.5" />
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(adjustment)}
+          className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+          title={`Can be changed for ${editWindowRemaining(adjustment.created_at, editWindowHours)}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Remove
+        </button>
+      </div>
     )
   }
 
@@ -445,7 +465,10 @@ const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) 
           variant="secondary"
           size="sm"
           icon={Landmark}
-          onClick={() => setShowForm(true)}
+          onClick={() => {
+            setEditingAdjustment(null)
+            setShowForm(true)
+          }}
           className="w-full sm:w-auto"
         >
           Log bank activity
@@ -483,16 +506,21 @@ const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) 
 
       <Modal
         isOpen={showForm}
-        onClose={() => setShowForm(false)}
-        title="Log bank activity"
+        onClose={closeForm}
+        title={editingAdjustment ? 'Edit bank activity' : 'Log bank activity'}
         size="md"
       >
         <BankAdjustmentForm
+          adjustment={editingAdjustment}
           onSubmit={async (data) => {
-            await onAdd(data)
-            setShowForm(false)
+            if (editingAdjustment) {
+              await onUpdate(editingAdjustment.id, data)
+            } else {
+              await onAdd(data)
+            }
+            closeForm()
           }}
-          onCancel={() => setShowForm(false)}
+          onCancel={closeForm}
         />
       </Modal>
     </SettingsSection>
@@ -686,6 +714,17 @@ const SettingsPage = () => {
     }
   }
 
+  const handleUpdateAdjustment = async (id, adjustmentData) => {
+    try {
+      await dbService.updateBankAdjustment(id, adjustmentData)
+      await loadAdjustments()
+      showSuccess('Entry updated')
+    } catch (error) {
+      console.error('Error updating bank activity:', error)
+      showError(`Failed to save that: ${error.message}`)
+    }
+  }
+
   const handleDeleteAdjustment = async () => {
     const target = adjustmentDeleteTarget
     if (!target?.id) return
@@ -805,6 +844,7 @@ const SettingsPage = () => {
             adjustments={adjustments}
             editWindowHours={editWindowHours}
             onAdd={handleAddAdjustment}
+            onUpdate={handleUpdateAdjustment}
             onDelete={setAdjustmentDeleteTarget}
           />
           

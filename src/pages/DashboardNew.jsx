@@ -19,6 +19,8 @@ const EMPTY = {
   availableBalance: 0,
   outstandingAmount: 0,
   totalContributions: 0,
+  totalFees: 0,
+  totalInterest: 0,
   activeMissions: 0,
   awaitingMyVote: 0,
   memberTotals: [],
@@ -96,12 +98,20 @@ const Dashboard = () => {
         summary.missions?.filter((m) => m.status === 'approved')
       )
       const repaidTotal = sumAmounts(summary.repayments)
+      const totalFees = sumAmounts(
+        summary.bankAdjustments?.filter((a) => a.kind === 'fee')
+      )
+      const totalInterest = sumAmounts(
+        summary.bankAdjustments?.filter((a) => a.kind === 'interest')
+      )
 
       setData({
         vaultBalance: Number(summary.vaultBalance) || 0,
         availableBalance: Number(summary.availableBalance) || 0,
         outstandingAmount: Math.max(0, approvedTotal - repaidTotal),
         totalContributions: Number(summary.totalContributions) || 0,
+        totalFees,
+        totalInterest,
         activeMissions: summary.activeMissions || 0,
         awaitingMyVote: countAwaitingVote(
           summary.missions,
@@ -135,8 +145,9 @@ const Dashboard = () => {
 
   // Every figure on this screen is derived from these tables, so any change to
   // one of them dates the whole dashboard.
-  useLiveRefresh(['contributions', 'missions', 'votes', 'repayments', 'activity'], () =>
-    load(undefined, { quiet: true })
+  useLiveRefresh(
+    ['contributions', 'missions', 'votes', 'repayments', 'bank_adjustments', 'activity'],
+    () => load(undefined, { quiet: true })
   )
 
   // Activity entries about a request open that request.
@@ -226,6 +237,8 @@ const Dashboard = () => {
           availableBalance={data.availableBalance}
           outstandingAmount={data.outstandingAmount}
           lockedReserve={reserveFloor}
+          totalFees={data.totalFees}
+          totalInterest={data.totalInterest}
         />
 
         <QuickActions />
