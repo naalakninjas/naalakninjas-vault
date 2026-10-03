@@ -244,18 +244,20 @@ Ten tables:
 | `missions` | Emergency requests: `pending` → `approved`/`rejected` → `repaid` |
 | `votes` | One vote per member per mission |
 | `repayments` | Payments against a mission |
-| `deductions` | Bank-side charges nobody requested — maintenance fees, SMS alerts, and the like |
+| `bank_adjustments` | Statement lines nobody requested: fees (shrink the vault) or interest (grow it), told apart by `kind` |
 | `activity` | Append-only audit log, written by triggers. `mission_id` links an entry to the request it is about |
 | `login_events` | Every sign-in attempt, written by `verify_member_pin()` |
 | `keep_alive_runs` | One row per keep-alive ping, cron or manual |
 | `vault_settings` | The business rules above, as key/value rows |
 
 The vault balance is contributions minus money disbursed (approved/repaid
-missions) plus repayments minus deductions — see `get_vault_balance()` in
-`db/schema.sql`. Any ninja can log a deduction from Settings → **Bank
-deductions**; it drops straight out of the balance and shows up in the
-activity feed like everything else. Entries are correctable for the same
-edit window as contributions and repayments, after which the ledger settles.
+missions) plus repayments minus fees plus interest — see
+`get_vault_balance()` in `db/schema.sql`. Any ninja can log either from
+Settings → **Bank activity**: a maintenance fee or SMS charge drops straight
+out of the balance, savings interest adds straight into it, and either way it
+shows up in the activity feed like everything else. Entries are correctable
+for the same edit window as contributions and repayments, after which the
+ledger settles.
 
 Two views back read paths. `v_mission_summary` folds vote tallies and repayment
 progress into each mission row, so one row renders a card. `v_last_sign_in`

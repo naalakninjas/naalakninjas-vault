@@ -3,7 +3,7 @@
 --
 -- Use this to get an empty vault for an end-to-end test run.
 --
--- DELETES: contributions, missions, votes, repayments, deductions, activity
+-- DELETES: contributions, missions, votes, repayments, bank_adjustments, activity
 -- KEEPS:   members (the four ninjas) and vault_settings (your business rules)
 --
 -- This is destructive and cannot be undone. Run it in the Supabase SQL editor.
@@ -25,7 +25,7 @@ SELECT 'missions',      COUNT(*), COALESCE(SUM(amount), 0) FROM missions
 UNION ALL
 SELECT 'repayments',    COUNT(*), COALESCE(SUM(amount), 0) FROM repayments
 UNION ALL
-SELECT 'deductions',    COUNT(*), COALESCE(SUM(amount), 0) FROM deductions
+SELECT 'bank_adjustments', COUNT(*), COALESCE(SUM(amount), 0) FROM bank_adjustments
 UNION ALL
 SELECT 'votes',         COUNT(*), NULL FROM votes
 UNION ALL
@@ -54,14 +54,14 @@ ALTER TABLE contributions DISABLE TRIGGER trigger_guard_contribution_change;
 ALTER TABLE repayments    DISABLE TRIGGER trigger_log_repayment_deletion;
 ALTER TABLE repayments    DISABLE TRIGGER trigger_guard_repayment_change;
 ALTER TABLE missions      DISABLE TRIGGER trigger_guard_mission_deletion;
-ALTER TABLE deductions    DISABLE TRIGGER trigger_log_deduction_deletion;
-ALTER TABLE deductions    DISABLE TRIGGER trigger_guard_deduction_change;
+ALTER TABLE bank_adjustments DISABLE TRIGGER trigger_log_bank_adjustment_deletion;
+ALTER TABLE bank_adjustments DISABLE TRIGGER trigger_guard_bank_adjustment_change;
 
 DELETE FROM votes;
 DELETE FROM repayments;
 DELETE FROM missions;
 DELETE FROM contributions;
-DELETE FROM deductions;
+DELETE FROM bank_adjustments;
 DELETE FROM activity;
 
 ALTER TABLE contributions ENABLE TRIGGER trigger_log_contribution_deletion;
@@ -69,8 +69,8 @@ ALTER TABLE contributions ENABLE TRIGGER trigger_guard_contribution_change;
 ALTER TABLE repayments    ENABLE TRIGGER trigger_log_repayment_deletion;
 ALTER TABLE repayments    ENABLE TRIGGER trigger_guard_repayment_change;
 ALTER TABLE missions      ENABLE TRIGGER trigger_guard_mission_deletion;
-ALTER TABLE deductions    ENABLE TRIGGER trigger_log_deduction_deletion;
-ALTER TABLE deductions    ENABLE TRIGGER trigger_guard_deduction_change;
+ALTER TABLE bank_adjustments ENABLE TRIGGER trigger_log_bank_adjustment_deletion;
+ALTER TABLE bank_adjustments ENABLE TRIGGER trigger_guard_bank_adjustment_change;
 
 
 -- ----------------------------------------------------------------------------
@@ -84,7 +84,7 @@ ALTER SEQUENCE contributions_id_seq RESTART WITH 1;
 ALTER SEQUENCE missions_id_seq      RESTART WITH 1;
 ALTER SEQUENCE votes_id_seq         RESTART WITH 1;
 ALTER SEQUENCE repayments_id_seq    RESTART WITH 1;
-ALTER SEQUENCE deductions_id_seq    RESTART WITH 1;
+ALTER SEQUENCE bank_adjustments_id_seq RESTART WITH 1;
 ALTER SEQUENCE activity_id_seq      RESTART WITH 1;
 
 
@@ -97,7 +97,7 @@ SELECT 'Reset complete.'                     AS status,
        (SELECT COUNT(*) FROM missions)       AS missions,
        (SELECT COUNT(*) FROM votes)          AS votes,
        (SELECT COUNT(*) FROM repayments)     AS repayments,
-       (SELECT COUNT(*) FROM deductions)     AS deductions,
+       (SELECT COUNT(*) FROM bank_adjustments) AS bank_adjustments,
        (SELECT COUNT(*) FROM activity)       AS activity,
        (SELECT COUNT(*) FROM members)        AS members_kept,
        (SELECT COUNT(*) FROM vault_settings) AS settings_kept,

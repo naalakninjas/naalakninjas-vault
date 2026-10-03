@@ -276,37 +276,39 @@ export const dbService = {
     if (error) throw error
   },
 
-  // Deductions — bank-side charges (maintenance fees and similar) that shrink
-  // the vault without anyone requesting them. get_vault_balance() nets these
-  // out on the database side, so nothing else needs to know about them to
-  // stay correct; this is just the ledger for seeing and managing them.
-  async getDeductions() {
+  // Bank adjustments — lines the bank adds to the statement that nobody in
+  // the squad requested. `kind` is 'fee' (maintenance charges, SMS alerts —
+  // shrinks the vault) or 'interest' (savings interest credited — grows it).
+  // get_vault_balance() nets both out on the database side, so nothing else
+  // needs to know about them to stay correct; this is just the ledger for
+  // seeing and managing them.
+  async getBankAdjustments() {
     const { data, error } = await supabase
-      .from('deductions')
+      .from('bank_adjustments')
       .select(`
         *,
         members(name, color)
       `)
-      .order('charge_date', { ascending: false })
+      .order('entry_date', { ascending: false })
       .order('created_at', { ascending: false })
 
     if (error) throw error
     return data
   },
 
-  async addDeduction(deduction) {
+  async addBankAdjustment(adjustment) {
     const { data, error } = await supabase
-      .from('deductions')
-      .insert([deduction])
+      .from('bank_adjustments')
+      .insert([adjustment])
       .select()
 
     if (error) throw error
     return data[0]
   },
 
-  async deleteDeduction(id) {
+  async deleteBankAdjustment(id) {
     const { error } = await supabase
-      .from('deductions')
+      .from('bank_adjustments')
       .delete()
       .eq('id', id)
 

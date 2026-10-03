@@ -36,7 +36,7 @@ import {
   isWithinEditWindow,
   readEditWindowHours
 } from '../utils/editWindow'
-import DeductionForm from '../components/DeductionForm'
+import BankAdjustmentForm from '../components/BankAdjustmentForm'
 import { useLiveRefresh } from '../hooks/useLiveRefresh'
 
 const SettingsSection = ({ title, children, className = '' }) => (
@@ -376,19 +376,24 @@ const LockedOutSection = ({ candidates, onReset }) => {
 }
 
 /**
- * Bank-side charges — maintenance fees, SMS alerts and the like — that shrink
- * the vault without anyone requesting them. get_vault_balance() already nets
- * these out, so this section exists purely so the squad can see and manage
- * the ledger entry behind that drop, instead of the balance just quietly
- * being lower than everyone expected.
+ * Lines the bank adds to the statement that nobody in the squad requested —
+ * fees on one side, interest credited on the other.
+ * get_vault_balance() already nets both in, so this section exists purely so
+ * the squad can see and manage the ledger entries behind that movement,
+ * instead of the balance just quietly being different than everyone expected.
  */
-const BankDeductionsSection = ({ deductions, editWindowHours, onAdd, onDelete }) => {
+const BankActivitySection = ({ adjustments, editWindowHours, onAdd, onDelete }) => {
   const [showForm, setShowForm] = useState(false)
 
-  const total = deductions.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
+  const totalFees = adjustments
+    .filter((a) => a.kind === 'fee')
+    .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
+  const totalInterest = adjustments
+    .filter((a) => a.kind === 'interest')
+    .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
 
-  const renderActions = (deduction) => {
-    if (!isWithinEditWindow(deduction.created_at, editWindowHours)) {
+  const renderActions = (adjustment) => {
+    if (!isWithinEditWindow(adjustment.created_at, editWindowHours)) {
       return (
         <span
           className="text-[11px] text-faint"
@@ -402,9 +407,9 @@ const BankDeductionsSection = ({ deductions, editWindowHours, onAdd, onDelete })
     return (
       <button
         type="button"
-        onClick={() => onDelete(deduction)}
+        onClick={() => onDelete(adjustment)}
         className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
-        title={`Can be removed for ${editWindowRemaining(deduction.created_at, editWindowHours)}`}
+        title={`Can be removed for ${editWindowRemaining(adjustment.created_at, editWindowHours)}`}
       >
         <Trash2 className="h-3.5 w-3.5" />
         Remove
@@ -413,16 +418,26 @@ const BankDeductionsSection = ({ deductions, editWindowHours, onAdd, onDelete })
   }
 
   return (
-    <SettingsSection title="Bank deductions">
+    <SettingsSection title="Bank activity">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-md text-sm text-muted">
-          Maintenance fees and other charges the bank takes without anyone
+          Fees and interest the bank adds to the statement without anyone
           asking. Logging these here keeps the vault balance honest.
-          {total > 0 && (
+          {(totalFees > 0 || totalInterest > 0) && (
             <>
               {' '}
-              <span className="numeric font-medium text-strong">{formatMoney(total)}</span>
-              {' deducted so far.'}
+              {totalFees > 0 && (
+                <span className="numeric font-medium text-red-400">
+                  -{formatMoney(totalFees)} fees
+                </span>
+              )}
+              {totalFees > 0 && totalInterest > 0 && ', '}
+              {totalInterest > 0 && (
+                <span className="numeric font-medium text-emerald-400">
+                  +{formatMoney(totalInterest)} interest
+                </span>
+              )}
+              {' so far.'}
             </>
           )}
         </p>
@@ -433,39 +448,46 @@ const BankDeductionsSection = ({ deductions, editWindowHours, onAdd, onDelete })
           onClick={() => setShowForm(true)}
           className="w-full sm:w-auto"
         >
-          Log a deduction
+          Log bank activity
         </Button>
       </div>
 
-      {deductions.length === 0 ? (
-        <p className="py-4 text-center text-sm text-faint">No bank deductions logged yet.</p>
+      {adjustments.length === 0 ? (
+        <p className="py-4 text-center text-sm text-faint">Nothing logged yet.</p>
       ) : (
         <ul className="divide-y divide-[color:var(--line-subtle)]">
-          {deductions.map((deduction) => (
-            <li key={deduction.id} className="flex items-center justify-between gap-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-strong">{deduction.reason}</p>
-                <p className="text-[11px] text-faint">
-                  {formatDate(deduction.charge_date)}
-                  {deduction.members?.name ? ` · logged by ${deduction.members.name}` : ''}
-                </p>
-              </div>
-              <span className="numeric shrink-0 text-sm font-semibold text-red-400">
-                -{formatMoney(deduction.amount)}
-              </span>
-              {renderActions(deduction)}
-            </li>
-          ))}
+          {adjustments.map((adjustment) => {
+            const isInterest = adjustment.kind === 'interest'
+            return (
+              <li key={adjustment.id} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-strong">{adjustment.reason}</p>
+                  <p className="text-[11px] text-faint">
+                    {formatDate(adjustment.entry_date)}
+                    {adjustment.members?.name ? ` · logged by ${adjustment.members.name}` : ''}
+                  </p>
+                </div>
+                <span
+                  className={`numeric shrink-0 text-sm font-semibold ${
+                    isInterest ? 'text-emerald-400' : 'text-red-400'
+                  }`}
+                >
+                  {isInterest ? '+' : '-'}{formatMoney(adjustment.amount)}
+                </span>
+                {renderActions(adjustment)}
+              </li>
+            )
+          })}
         </ul>
       )}
 
       <Modal
         isOpen={showForm}
         onClose={() => setShowForm(false)}
-        title="Log a bank deduction"
+        title="Log bank activity"
         size="md"
       >
-        <DeductionForm
+        <BankAdjustmentForm
           onSubmit={async (data) => {
             await onAdd(data)
             setShowForm(false)
@@ -568,18 +590,18 @@ const SettingsPage = () => {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
-  const [deductions, setDeductions] = useState([])
+  const [adjustments, setAdjustments] = useState([])
   const [editWindowHours, setEditWindowHours] = useState(DEFAULT_EDIT_WINDOW_HOURS)
-  const [deductionDeleteTarget, setDeductionDeleteTarget] = useState(null)
+  const [adjustmentDeleteTarget, setAdjustmentDeleteTarget] = useState(null)
 
   useEffect(() => {
     loadSettings()
-    loadDeductions()
+    loadAdjustments()
   }, [])
 
-  // Someone logging a bank charge, or deleting one, should not need a reload
-  // on every other ninja's phone before they see it.
-  useLiveRefresh(['deductions'], () => loadDeductions())
+  // Someone logging a fee or interest, or deleting one, should not need a
+  // reload on every other ninja's phone before they see it.
+  useLiveRefresh(['bank_adjustments'], () => loadAdjustments())
 
   useEffect(() => {
     const changed = Object.keys(settings).some(key => settings[key] !== originalSettings[key])
@@ -645,38 +667,38 @@ const SettingsPage = () => {
     }
   }
 
-  const loadDeductions = async () => {
+  const loadAdjustments = async () => {
     try {
-      setDeductions(await dbService.getDeductions())
+      setAdjustments(await dbService.getBankAdjustments())
     } catch (error) {
-      console.error('Error loading bank deductions:', error)
+      console.error('Error loading bank activity:', error)
     }
   }
 
-  const handleAddDeduction = async (deductionData) => {
+  const handleAddAdjustment = async (adjustmentData) => {
     try {
-      await dbService.addDeduction(deductionData)
-      await loadDeductions()
-      showSuccess('Deduction logged')
+      await dbService.addBankAdjustment(adjustmentData)
+      await loadAdjustments()
+      showSuccess(adjustmentData.kind === 'interest' ? 'Interest logged' : 'Fee logged')
     } catch (error) {
-      console.error('Error logging deduction:', error)
-      showError(`Failed to log deduction: ${error.message}`)
+      console.error('Error logging bank activity:', error)
+      showError(`Failed to log that: ${error.message}`)
     }
   }
 
-  const handleDeleteDeduction = async () => {
-    const target = deductionDeleteTarget
+  const handleDeleteAdjustment = async () => {
+    const target = adjustmentDeleteTarget
     if (!target?.id) return
 
     try {
-      await dbService.deleteDeduction(target.id)
-      await loadDeductions()
-      showSuccess('Deduction removed')
+      await dbService.deleteBankAdjustment(target.id)
+      await loadAdjustments()
+      showSuccess('Entry removed')
     } catch (error) {
-      console.error('Error deleting deduction:', error)
-      showError(`Failed to delete deduction: ${error.message}`)
+      console.error('Error deleting bank activity entry:', error)
+      showError(`Failed to remove that: ${error.message}`)
     } finally {
-      setDeductionDeleteTarget(null)
+      setAdjustmentDeleteTarget(null)
     }
   }
 
@@ -779,11 +801,11 @@ const SettingsPage = () => {
             onReset={handleResetPin}
           />
 
-          <BankDeductionsSection
-            deductions={deductions}
+          <BankActivitySection
+            adjustments={adjustments}
             editWindowHours={editWindowHours}
-            onAdd={handleAddDeduction}
-            onDelete={setDeductionDeleteTarget}
+            onAdd={handleAddAdjustment}
+            onDelete={setAdjustmentDeleteTarget}
           />
           
           <VaultRulesSection
@@ -798,16 +820,20 @@ const SettingsPage = () => {
 
       {/* Deletes are permanent, so name the exact entry before confirming */}
       <ConfirmDialog
-        isOpen={Boolean(deductionDeleteTarget)}
-        onClose={() => setDeductionDeleteTarget(null)}
-        onConfirm={handleDeleteDeduction}
-        title="Remove this deduction?"
+        isOpen={Boolean(adjustmentDeleteTarget)}
+        onClose={() => setAdjustmentDeleteTarget(null)}
+        onConfirm={handleDeleteAdjustment}
+        title="Remove this entry?"
         message={
-          deductionDeleteTarget
-            ? `${formatMoney(deductionDeleteTarget.amount)} for "${deductionDeleteTarget.reason}" will be removed.`
+          adjustmentDeleteTarget
+            ? `${formatMoney(adjustmentDeleteTarget.amount)} for "${adjustmentDeleteTarget.reason}" will be removed.`
             : ''
         }
-        details="This cannot be undone and the vault balance will rise by that amount."
+        details={
+          adjustmentDeleteTarget?.kind === 'interest'
+            ? 'This cannot be undone and the vault balance will drop by that amount.'
+            : 'This cannot be undone and the vault balance will rise by that amount.'
+        }
         confirmLabel="Remove"
       />
     </PageContainer>

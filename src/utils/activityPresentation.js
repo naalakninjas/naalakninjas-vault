@@ -10,6 +10,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
+  TrendingUp,
   XCircle,
   Activity as ActivityIcon
 } from 'lucide-react'
@@ -54,9 +55,14 @@ export const presentation = (actionType = '') => {
   if (type.includes('mission')) {
     return { icon: LifeBuoy, accent: '#8B5CF6' }
   }
-  // A charge nobody requested — distinct from a mission disbursement, which
-  // the squad voted on.
-  if (type.includes('deduction')) {
+  // Bank statement lines nobody requested — distinct from a mission
+  // disbursement, which the squad voted on. 'fee_deleted'/'interest_deleted'
+  // never reach here: the 'deleted' catch-all at the top already gives every
+  // deletion in the feed the same Trash2 icon.
+  if (type.includes('interest')) {
+    return { icon: TrendingUp, accent: '#10B981' }
+  }
+  if (type.includes('fee')) {
     return { icon: Landmark, accent: '#F87171' }
   }
   // Checked before the generic 'pin' case: one ninja acting on a teammate's
