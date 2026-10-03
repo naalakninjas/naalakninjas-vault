@@ -477,6 +477,63 @@ BEGIN
 END;
 $$;
 
+-- Lets one ninja clear a teammate's forgotten PIN without anyone touching
+-- Supabase directly. The admin here is not a role — it is just whichever
+-- ninja is physically present and willing to vouch for the reset — so the
+-- gate is the admin's *own* PIN, not a separate permission. That is also why
+-- a reset clears the hash instead of choosing a new PIN for them: the admin
+-- proves it is really them acting, but the teammate still picks their own PIN
+-- on next sign-in rather than being handed one somebody else knows.
+--
+-- Logged to activity with the admin's name attached, deliberately not
+-- silent — a PIN reset is a sensitive enough action that everyone in the
+-- vault should be able to see who did it and to whom.
+CREATE OR REPLACE FUNCTION reset_member_pin(
+    p_admin_id  INTEGER,
+    p_admin_pin TEXT,
+    p_target_id INTEGER
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+    admin_hash  TEXT;
+    admin_name  TEXT;
+    target_name TEXT;
+BEGIN
+    IF p_admin_id = p_target_id THEN
+        RAISE EXCEPTION 'Use Change PIN to reset your own PIN';
+    END IF;
+
+    SELECT pin_hash, name INTO admin_hash, admin_name
+    FROM members
+    WHERE id = p_admin_id;
+
+    IF admin_hash IS NULL OR admin_hash <> crypt(p_admin_pin, admin_hash) THEN
+        RAISE EXCEPTION 'Your PIN is incorrect';
+    END IF;
+
+    SELECT name INTO target_name FROM members WHERE id = p_target_id;
+
+    IF target_name IS NULL THEN
+        RAISE EXCEPTION 'No such member: %', p_target_id;
+    END IF;
+
+    UPDATE members
+    SET pin_hash   = NULL,
+        pin_set_at = NULL
+    WHERE id = p_target_id;
+
+    PERFORM add_activity(
+        admin_name || ' reset ' || target_name || '''s PIN',
+        p_admin_id,
+        'pin_reset'
+    );
+END;
+$$;
+
 
 -- ============================================================================
 -- 5. VIEWS
@@ -1199,6 +1256,7 @@ GRANT EXECUTE ON FUNCTION member_pin_status()                        TO anon;
 GRANT EXECUTE ON FUNCTION verify_member_pin(INTEGER, TEXT)           TO anon;
 GRANT EXECUTE ON FUNCTION touch_sign_in(INTEGER)                   TO anon;
 GRANT EXECUTE ON FUNCTION set_member_pin(INTEGER, TEXT, TEXT)        TO anon;
+GRANT EXECUTE ON FUNCTION reset_member_pin(INTEGER, TEXT, INTEGER)   TO anon;
 
 -- members.pin_hash must stay unreadable from the browser, and the blanket
 -- table grant above would hand it over. RLS cannot help here: policies filter

@@ -81,6 +81,21 @@ export const dbService = {
     if (error) throw error
   },
 
+  /**
+   * Clears a teammate's forgotten PIN so they see first-run setup again.
+   * Gated on the acting ninja's own PIN rather than a separate permission —
+   * see reset_member_pin() in db/schema.sql for why.
+   */
+  async resetMemberPin(adminId, adminPin, targetId) {
+    const { error } = await supabase.rpc('reset_member_pin', {
+      p_admin_id: adminId,
+      p_admin_pin: adminPin,
+      p_target_id: targetId
+    })
+
+    if (error) throw error
+  },
+
   // Contributions
   async getContributions(memberId = null, month = null, year = null) {
     try {

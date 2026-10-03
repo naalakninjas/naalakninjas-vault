@@ -3,6 +3,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CheckCircle2,
+  KeyRound,
   LifeBuoy,
   LogIn,
   ThumbsDown,
@@ -51,6 +52,11 @@ export const presentation = (actionType = '') => {
   }
   if (type.includes('mission')) {
     return { icon: LifeBuoy, accent: '#8B5CF6' }
+  }
+  // Checked before the generic 'pin' case: one ninja acting on a teammate's
+  // account is worth a visibly different icon from their own routine change.
+  if (type.includes('pin_reset')) {
+    return { icon: KeyRound, accent: '#F59E0B' }
   }
   if (type.includes('pin')) {
     return { icon: LogIn, accent: '#A78BFA' }

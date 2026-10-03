@@ -91,9 +91,19 @@ selecting `*`.
 
 Two consequences worth knowing. **Whoever sets a PIN first claims that ninja**,
 since a first PIN needs nothing to prove against; tell the squad to set theirs
-before sharing the URL. And **nothing recovers a forgotten PIN** — clear it with
-`UPDATE members SET pin_hash = NULL WHERE name = '...'` in the Supabase SQL
-editor, which returns that ninja to first-run setup.
+before sharing the URL. And **nothing recovers a forgotten PIN** — bcrypt is
+one-way, so there is no value to retrieve. It can only be cleared, after which
+that ninja sees first-run setup again and chooses a fresh one.
+
+A locked-out teammate no longer needs the Supabase SQL editor for that:
+Settings → **Locked out teammate?** lets any ninja clear someone else's PIN,
+gated on their *own* PIN rather than any special permission — `reset_member_pin()`
+in `db/schema.sql` checks the caller's hash, refuses to let anyone target
+themselves (use Change PIN for that), and never sets the new PIN itself, only
+clears the old one. The reset is logged to the shared activity feed like any
+other action, so it's never silent. The manual fallback still works if needed:
+`UPDATE members SET pin_hash = NULL, pin_set_at = NULL WHERE name = '...'` in
+the Supabase SQL editor.
 
 Earlier versions shipped a starting PIN per ninja, which meant the values sat
 in the source and therefore in the deployed bundle. A later version fixed that

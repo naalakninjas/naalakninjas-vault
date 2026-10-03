@@ -4,6 +4,7 @@ import {
   Shield, 
   Save,
   Lock,
+  KeyRound,
   Eye,
   EyeOff,
   DollarSign,
@@ -208,6 +209,161 @@ const PinChangeModal = ({ isOpen, onClose, onSubmit, currentNinja }) => {
   )
 }
 
+/**
+ * Clears a teammate's PIN so they see first-run setup again next time they
+ * open the vault. Gated on the acting ninja's *own* PIN rather than any
+ * special permission — anyone in the squad can vouch for a reset, but only
+ * by proving it is really them, not by knowing the locked-out ninja's secret.
+ *
+ * The target picks their own new PIN afterwards; this modal never sets one
+ * on their behalf, so no one but them ever knows it.
+ */
+const ResetPinModal = ({ isOpen, onClose, onSubmit, candidates }) => {
+  const [targetId, setTargetId] = useState('')
+  const [adminPin, setAdminPin] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const reset = () => {
+    setTargetId('')
+    setAdminPin('')
+    setError('')
+  }
+
+  const handleSubmit = async () => {
+    if (!targetId) {
+      setError('Choose who needs a reset.')
+      return
+    }
+    if (!/^\d{4}$/.test(adminPin)) {
+      setError('Enter your own 4-digit PIN to confirm.')
+      return
+    }
+
+    setSaving(true)
+    const result = await onSubmit(Number(targetId), adminPin)
+    setSaving(false)
+
+    // Held open on failure, same as PinChangeModal: the reason is almost
+    // always a mistyped PIN, and closing would make them start over blind.
+    if (!result?.success) {
+      setError(result?.error || 'Could not reset that PIN.')
+      return
+    }
+
+    onClose()
+    reset()
+  }
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={() => {
+        onClose()
+        reset()
+      }}
+      title="Reset a teammate's PIN"
+      size="md"
+    >
+      <div className="space-y-6">
+        <p className="text-sm text-muted">
+          This clears their PIN so they are asked to choose a new one next time
+          they open the vault. You cannot choose it for them, and everyone will
+          see in the activity feed that you did this.
+        </p>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-muted">
+            Who forgot their PIN?
+          </label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="w-full rounded-lg border bg-[color:var(--surface-base)] px-3 py-2.5 text-sm text-strong"
+            style={{ borderColor: 'var(--line-subtle)' }}
+          >
+            <option value="">Select a ninja...</option>
+            {candidates.map((ninja) => (
+              <option key={ninja.id} value={ninja.id}>
+                {ninja.name}
+              </option>
+            ))}
+          </select>
+          {candidates.length === 0 && (
+            <p className="mt-1.5 text-xs text-faint">
+              Nobody else has a PIN set yet — there is nothing to reset.
+            </p>
+          )}
+        </div>
+
+        <Input
+          label="Your PIN"
+          type="password"
+          value={adminPin}
+          onChange={(e) => setAdminPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+          error={error}
+          maxLength={4}
+          hint="Proves it's really you asking, not just anyone on this device."
+        />
+
+        <div className="flex gap-3 pt-2">
+          <Button
+            variant="warning"
+            onClick={handleSubmit}
+            loading={saving}
+            disabled={candidates.length === 0}
+            className="flex-1"
+          >
+            Reset their PIN
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              onClose()
+              reset()
+            }}
+            disabled={saving}
+            className="flex-1"
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+const LockedOutSection = ({ candidates, onReset }) => {
+  const [showReset, setShowReset] = useState(false)
+
+  return (
+    <SettingsSection title="Locked out teammate?">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-md text-sm text-muted">
+          If someone forgot their PIN, you can clear it for them here instead of
+          going into Supabase. They will choose a brand new one themselves.
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={KeyRound}
+          onClick={() => setShowReset(true)}
+          className="w-full sm:w-auto"
+        >
+          Reset a PIN
+        </Button>
+      </div>
+
+      <ResetPinModal
+        isOpen={showReset}
+        onClose={() => setShowReset(false)}
+        onSubmit={onReset}
+        candidates={candidates}
+      />
+    </SettingsSection>
+  )
+}
+
 const VaultRulesSection = ({ settings, onSettingsChange, onSave, hasChanges, saving }) => (
   <SettingsSection title="Vault rules">
     <div className="space-y-5">
@@ -282,7 +438,7 @@ const VaultRulesSection = ({ settings, onSettingsChange, onSave, hasChanges, sav
 
 
 const SettingsPage = () => {
-  const { currentNinja, updateNinjaPin } = useAuth()
+  const { currentNinja, updateNinjaPin, resetNinjaPin, ninjas, pinStatus } = useAuth()
   const [settings, setSettings] = useState({
     monthly_contribution: '5000',
     minimum_balance: '50000',
@@ -409,6 +565,26 @@ const SettingsPage = () => {
     return result
   }
 
+  // Only teammates who already have a PIN are worth offering — resetting one
+  // that was never set would just hand back the same first-run screen they
+  // are already on.
+  const lockedOutCandidates = ninjas.filter(
+    (ninja) => ninja.id !== currentNinja?.id && pinStatus?.[ninja.id]
+  )
+
+  const handleResetPin = async (targetId, adminPin) => {
+    const result = await resetNinjaPin(currentNinja.id, adminPin, targetId)
+    const targetName = ninjas.find((ninja) => ninja.id === targetId)?.name || 'Their'
+
+    if (result.success) {
+      showSuccess(`${targetName}'s PIN was reset. They'll choose a new one next time they open the vault.`)
+    } else {
+      showError(result.error)
+    }
+
+    return result
+  }
+
   if (loading) {
     return (
       <PageContainer>
@@ -439,6 +615,11 @@ const SettingsPage = () => {
             currentNinja={currentNinja} 
             onPinChange={handlePinChange}
             stats={profileStats}
+          />
+
+          <LockedOutSection
+            candidates={lockedOutCandidates}
+            onReset={handleResetPin}
           />
           
           <VaultRulesSection

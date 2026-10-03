@@ -47,6 +47,17 @@ const describePinFailure = (error) => {
   return 'Could not save your PIN. Check your connection and try again.'
 }
 
+/** Mirrors describePinFailure for the messages reset_member_pin() raises. */
+const describeResetFailure = (error) => {
+  const message = error?.message || ''
+
+  if (message.includes('Your PIN is incorrect')) return 'That is not your PIN.'
+  if (message.includes('reset your own PIN')) return 'Use Change PIN for your own PIN.'
+
+  console.error('Resetting the PIN failed:', message)
+  return 'Could not reset that PIN. Check your connection and try again.'
+}
+
 /**
  * Reads the stored session. Runs during the initial state setup rather than in
  * an effect: if the first render saw `null`, ProtectedRoute would redirect to
@@ -164,11 +175,27 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
+  /**
+   * Clears a locked-out teammate's PIN. `adminPin` is the *caller's* own PIN,
+   * checked in Postgres against the caller's own hash — proof that whoever is
+   * doing this knows their own PIN, not a credential belonging to `targetId`.
+   */
+  const resetNinjaPin = async (adminId, adminPin, targetId) => {
+    try {
+      await dbService.resetMemberPin(adminId, adminPin, targetId)
+      setPinStatus((previous) => ({ ...previous, [targetId]: false }))
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: describeResetFailure(error) }
+    }
+  }
+
   const value = {
     currentNinja,
     login,
     logout,
     updateNinjaPin,
+    resetNinjaPin,
     checkHasPin,
     pinStatus,
     ninjas
