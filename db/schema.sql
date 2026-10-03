@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS repayments (
     created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Money the bank takes out that nobody in the squad requested — maintenance
+-- fees, SMS/alert charges, minimum-balance penalties and the like. These
+-- shrink the real bank balance exactly like a mission disbursement does, so
+-- get_vault_balance() nets them out the same way, but they belong to nobody:
+-- `member_id` is who noticed and logged the charge, not who owes it.
+CREATE TABLE IF NOT EXISTS deductions (
+    id          SERIAL PRIMARY KEY,
+    member_id   INTEGER REFERENCES members(id) ON DELETE CASCADE,
+    amount      DECIMAL(10,2) NOT NULL CHECK (amount > 0),
+    reason      VARCHAR(100) NOT NULL,
+    charge_date DATE NOT NULL,
+    notes       TEXT,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Append-only audit log. Written by triggers, never by the app directly.
 --
 -- `mission_id` is the request an entry is about, where it is about one. The
@@ -176,6 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_contributions_member_date ON contributions (membe
 CREATE INDEX IF NOT EXISTS idx_missions_status           ON missions (status);
 CREATE INDEX IF NOT EXISTS idx_votes_mission             ON votes (mission_id);
 CREATE INDEX IF NOT EXISTS idx_repayments_mission        ON repayments (mission_id);
+CREATE INDEX IF NOT EXISTS idx_deductions_charge_date    ON deductions (charge_date DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_created_at       ON activity (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_login_events_created_at   ON login_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_keep_alive_runs_ran_at    ON keep_alive_runs (ran_at DESC);
@@ -218,6 +234,7 @@ ON CONFLICT (key) DO NOTHING;
 --   - money disbursed  (every mission that was ever approved, including ones
 --                       later marked 'repaid')
 --   + money paid back  (all repayments)
+--   - bank deductions  (maintenance fees and similar charges nobody requested)
 --
 -- Counting 'repaid' missions in the disbursed total is what makes repayments
 -- net out correctly. Two earlier versions of this function got this wrong:
@@ -231,6 +248,7 @@ DECLARE
     contributed DECIMAL(10,2);
     disbursed   DECIMAL(10,2);
     repaid      DECIMAL(10,2);
+    deducted    DECIMAL(10,2);
 BEGIN
     SELECT COALESCE(SUM(amount), 0) INTO contributed FROM contributions;
 
@@ -238,9 +256,10 @@ BEGIN
     FROM missions
     WHERE status IN ('approved', 'repaid');
 
-    SELECT COALESCE(SUM(amount), 0) INTO repaid FROM repayments;
+    SELECT COALESCE(SUM(amount), 0) INTO repaid    FROM repayments;
+    SELECT COALESCE(SUM(amount), 0) INTO deducted  FROM deductions;
 
-    RETURN contributed - disbursed + repaid;
+    RETURN contributed - disbursed + repaid - deducted;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1020,6 +1039,66 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Bank charges reduce the vault the moment they are entered, so log them
+-- like any other ledger write. member_id here is who noticed the charge, not
+-- who owes it — the message reads that way too.
+CREATE OR REPLACE FUNCTION log_deduction()
+RETURNS TRIGGER AS $$
+DECLARE
+    member_name TEXT;
+BEGIN
+    SELECT name INTO member_name FROM members WHERE id = NEW.member_id;
+
+    PERFORM add_activity(
+        COALESCE(member_name, 'A ninja') || ' logged a ₹' || NEW.amount ||
+            ' bank deduction: ' || NEW.reason,
+        NEW.member_id,
+        'deduction_added'
+    );
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Same correction window as contributions and repayments: fixable for a
+-- while after entry, then the ledger settles.
+CREATE OR REPLACE FUNCTION guard_deduction_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    window_hours INTEGER := edit_window_hours();
+BEGIN
+    IF OLD.created_at < NOW() - (window_hours || ' hours')::INTERVAL THEN
+        RAISE EXCEPTION
+            'This deduction is older than % hours and can no longer be changed',
+            window_hours;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION log_deduction_deletion()
+RETURNS TRIGGER AS $$
+DECLARE
+    member_name TEXT;
+BEGIN
+    SELECT name INTO member_name FROM members WHERE id = OLD.member_id;
+
+    PERFORM add_activity(
+        COALESCE(member_name, 'A ninja') || ' removed a ₹' || OLD.amount ||
+            ' bank deduction: ' || OLD.reason,
+        OLD.member_id,
+        'deduction_deleted'
+    );
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
 
 -- ============================================================================
 -- 7. TRIGGERS
@@ -1115,6 +1194,21 @@ CREATE TRIGGER trigger_log_repayment_deletion
     AFTER DELETE ON repayments
     FOR EACH ROW EXECUTE FUNCTION log_repayment_deletion();
 
+DROP TRIGGER IF EXISTS trigger_log_deduction ON deductions;
+CREATE TRIGGER trigger_log_deduction
+    AFTER INSERT ON deductions
+    FOR EACH ROW EXECUTE FUNCTION log_deduction();
+
+DROP TRIGGER IF EXISTS trigger_guard_deduction_change ON deductions;
+CREATE TRIGGER trigger_guard_deduction_change
+    BEFORE UPDATE OR DELETE ON deductions
+    FOR EACH ROW EXECUTE FUNCTION guard_deduction_change();
+
+DROP TRIGGER IF EXISTS trigger_log_deduction_deletion ON deductions;
+CREATE TRIGGER trigger_log_deduction_deletion
+    AFTER DELETE ON deductions
+    FOR EACH ROW EXECUTE FUNCTION log_deduction_deletion();
+
 -- Superseded trigger names and no-op functions from earlier revisions.
 DROP TRIGGER  IF EXISTS trigger_validate_mission_amount    ON missions;
 DROP TRIGGER  IF EXISTS validate_mission_business_trigger   ON missions;
@@ -1183,6 +1277,7 @@ ALTER TABLE contributions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE missions       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE repayments     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deductions     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vault_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE login_events    ENABLE ROW LEVEL SECURITY;
@@ -1206,6 +1301,10 @@ CREATE POLICY "Allow all operations on votes" ON votes
 
 DROP POLICY IF EXISTS "Allow all operations on repayments" ON repayments;
 CREATE POLICY "Allow all operations on repayments" ON repayments
+    FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all operations on deductions" ON deductions;
+CREATE POLICY "Allow all operations on deductions" ON deductions
     FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow all operations on activity" ON activity;
@@ -1321,7 +1420,7 @@ BEGIN
         RETURN;
     END IF;
 
-    FOREACH target IN ARRAY ARRAY['activity', 'contributions', 'missions', 'votes', 'repayments'] LOOP
+    FOREACH target IN ARRAY ARRAY['activity', 'contributions', 'missions', 'votes', 'repayments', 'deductions'] LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_publication_tables
              WHERE pubname = 'supabase_realtime'

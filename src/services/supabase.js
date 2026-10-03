@@ -276,6 +276,43 @@ export const dbService = {
     if (error) throw error
   },
 
+  // Deductions — bank-side charges (maintenance fees and similar) that shrink
+  // the vault without anyone requesting them. get_vault_balance() nets these
+  // out on the database side, so nothing else needs to know about them to
+  // stay correct; this is just the ledger for seeing and managing them.
+  async getDeductions() {
+    const { data, error } = await supabase
+      .from('deductions')
+      .select(`
+        *,
+        members(name, color)
+      `)
+      .order('charge_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    return data
+  },
+
+  async addDeduction(deduction) {
+    const { data, error } = await supabase
+      .from('deductions')
+      .insert([deduction])
+      .select()
+
+    if (error) throw error
+    return data[0]
+  },
+
+  async deleteDeduction(id) {
+    const { error } = await supabase
+      .from('deductions')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+  },
+
   // Activity
   async getActivity(limit = 20) {
     const { data, error } = await supabase

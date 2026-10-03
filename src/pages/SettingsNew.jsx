@@ -10,7 +10,9 @@ import {
   DollarSign,
   Users,
   Percent,
-  Clock
+  Clock,
+  Landmark,
+  Trash2
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { dbService } from '../services/supabase'
@@ -22,11 +24,20 @@ import {
   Input,
   Avatar,
   SkeletonLoader,
-  Modal
+  Modal,
+  ConfirmDialog
 } from '../components/ui'
 import { getNinjaBorderColor } from '../utils/ninjaHelpers.jsx'
 import { showError, showSuccess } from '../utils/toast'
-import { formatMoney } from '../utils/format'
+import { formatDate, formatMoney } from '../utils/format'
+import {
+  DEFAULT_EDIT_WINDOW_HOURS,
+  editWindowRemaining,
+  isWithinEditWindow,
+  readEditWindowHours
+} from '../utils/editWindow'
+import DeductionForm from '../components/DeductionForm'
+import { useLiveRefresh } from '../hooks/useLiveRefresh'
 
 const SettingsSection = ({ title, children, className = '' }) => (
   <Card className={`p-5 ${className}`}>
@@ -364,6 +375,108 @@ const LockedOutSection = ({ candidates, onReset }) => {
   )
 }
 
+/**
+ * Bank-side charges — maintenance fees, SMS alerts and the like — that shrink
+ * the vault without anyone requesting them. get_vault_balance() already nets
+ * these out, so this section exists purely so the squad can see and manage
+ * the ledger entry behind that drop, instead of the balance just quietly
+ * being lower than everyone expected.
+ */
+const BankDeductionsSection = ({ deductions, editWindowHours, onAdd, onDelete }) => {
+  const [showForm, setShowForm] = useState(false)
+
+  const total = deductions.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
+
+  const renderActions = (deduction) => {
+    if (!isWithinEditWindow(deduction.created_at, editWindowHours)) {
+      return (
+        <span
+          className="text-[11px] text-faint"
+          title={`Editing closed ${editWindowHours} hours after the entry was added`}
+        >
+          Locked
+        </span>
+      )
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => onDelete(deduction)}
+        className="focus-ring inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+        title={`Can be removed for ${editWindowRemaining(deduction.created_at, editWindowHours)}`}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Remove
+      </button>
+    )
+  }
+
+  return (
+    <SettingsSection title="Bank deductions">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-md text-sm text-muted">
+          Maintenance fees and other charges the bank takes without anyone
+          asking. Logging these here keeps the vault balance honest.
+          {total > 0 && (
+            <>
+              {' '}
+              <span className="numeric font-medium text-strong">{formatMoney(total)}</span>
+              {' deducted so far.'}
+            </>
+          )}
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Landmark}
+          onClick={() => setShowForm(true)}
+          className="w-full sm:w-auto"
+        >
+          Log a deduction
+        </Button>
+      </div>
+
+      {deductions.length === 0 ? (
+        <p className="py-4 text-center text-sm text-faint">No bank deductions logged yet.</p>
+      ) : (
+        <ul className="divide-y divide-[color:var(--line-subtle)]">
+          {deductions.map((deduction) => (
+            <li key={deduction.id} className="flex items-center justify-between gap-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-strong">{deduction.reason}</p>
+                <p className="text-[11px] text-faint">
+                  {formatDate(deduction.charge_date)}
+                  {deduction.members?.name ? ` · logged by ${deduction.members.name}` : ''}
+                </p>
+              </div>
+              <span className="numeric shrink-0 text-sm font-semibold text-red-400">
+                -{formatMoney(deduction.amount)}
+              </span>
+              {renderActions(deduction)}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Modal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        title="Log a bank deduction"
+        size="md"
+      >
+        <DeductionForm
+          onSubmit={async (data) => {
+            await onAdd(data)
+            setShowForm(false)
+          }}
+          onCancel={() => setShowForm(false)}
+        />
+      </Modal>
+    </SettingsSection>
+  )
+}
+
 const VaultRulesSection = ({ settings, onSettingsChange, onSave, hasChanges, saving }) => (
   <SettingsSection title="Vault rules">
     <div className="space-y-5">
@@ -455,10 +568,18 @@ const SettingsPage = () => {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+  const [deductions, setDeductions] = useState([])
+  const [editWindowHours, setEditWindowHours] = useState(DEFAULT_EDIT_WINDOW_HOURS)
+  const [deductionDeleteTarget, setDeductionDeleteTarget] = useState(null)
 
   useEffect(() => {
     loadSettings()
+    loadDeductions()
   }, [])
+
+  // Someone logging a bank charge, or deleting one, should not need a reload
+  // on every other ninja's phone before they see it.
+  useLiveRefresh(['deductions'], () => loadDeductions())
 
   useEffect(() => {
     const changed = Object.keys(settings).some(key => settings[key] !== originalSettings[key])
@@ -516,10 +637,46 @@ const SettingsPage = () => {
 
       setSettings(resolved)
       setOriginalSettings(resolved)
+      setEditWindowHours(readEditWindowHours(settingsData))
     } catch (error) {
       console.error('Error loading settings:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadDeductions = async () => {
+    try {
+      setDeductions(await dbService.getDeductions())
+    } catch (error) {
+      console.error('Error loading bank deductions:', error)
+    }
+  }
+
+  const handleAddDeduction = async (deductionData) => {
+    try {
+      await dbService.addDeduction(deductionData)
+      await loadDeductions()
+      showSuccess('Deduction logged')
+    } catch (error) {
+      console.error('Error logging deduction:', error)
+      showError(`Failed to log deduction: ${error.message}`)
+    }
+  }
+
+  const handleDeleteDeduction = async () => {
+    const target = deductionDeleteTarget
+    if (!target?.id) return
+
+    try {
+      await dbService.deleteDeduction(target.id)
+      await loadDeductions()
+      showSuccess('Deduction removed')
+    } catch (error) {
+      console.error('Error deleting deduction:', error)
+      showError(`Failed to delete deduction: ${error.message}`)
+    } finally {
+      setDeductionDeleteTarget(null)
     }
   }
 
@@ -621,6 +778,13 @@ const SettingsPage = () => {
             candidates={lockedOutCandidates}
             onReset={handleResetPin}
           />
+
+          <BankDeductionsSection
+            deductions={deductions}
+            editWindowHours={editWindowHours}
+            onAdd={handleAddDeduction}
+            onDelete={setDeductionDeleteTarget}
+          />
           
           <VaultRulesSection
             settings={settings}
@@ -631,6 +795,21 @@ const SettingsPage = () => {
           />
         </div>
       </div>
+
+      {/* Deletes are permanent, so name the exact entry before confirming */}
+      <ConfirmDialog
+        isOpen={Boolean(deductionDeleteTarget)}
+        onClose={() => setDeductionDeleteTarget(null)}
+        onConfirm={handleDeleteDeduction}
+        title="Remove this deduction?"
+        message={
+          deductionDeleteTarget
+            ? `${formatMoney(deductionDeleteTarget.amount)} for "${deductionDeleteTarget.reason}" will be removed.`
+            : ''
+        }
+        details="This cannot be undone and the vault balance will rise by that amount."
+        confirmLabel="Remove"
+      />
     </PageContainer>
   )
 }

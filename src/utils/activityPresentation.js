@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   KeyRound,
+  Landmark,
   LifeBuoy,
   LogIn,
   ThumbsDown,
@@ -52,6 +53,11 @@ export const presentation = (actionType = '') => {
   }
   if (type.includes('mission')) {
     return { icon: LifeBuoy, accent: '#8B5CF6' }
+  }
+  // A charge nobody requested — distinct from a mission disbursement, which
+  // the squad voted on.
+  if (type.includes('deduction')) {
+    return { icon: Landmark, accent: '#F87171' }
   }
   // Checked before the generic 'pin' case: one ninja acting on a teammate's
   // account is worth a visibly different icon from their own routine change.
