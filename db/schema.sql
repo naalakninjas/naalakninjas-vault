@@ -178,6 +178,16 @@ ALTER TABLE vault_settings ADD COLUMN IF NOT EXISTS description TEXT;
 -- is exactly what the default backfills them as.
 ALTER TABLE keep_alive_runs ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'cron';
 
+-- 'pin' is an actual PIN check (verify_member_pin, and set_member_pin's own
+-- insert on first PIN set); 'session' is touch_sign_in waking up a tab that
+-- was already signed in. Both can fire within moments of each other —
+-- logging in calls verify_member_pin, which changes currentNinja, which the
+-- app reacts to by touching the session — so the Recent attempts list tells
+-- them apart to show one line for that moment instead of two. Existing rows
+-- predate this column and were all real PIN checks, so they backfill as 'pin'.
+ALTER TABLE login_events ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'pin'
+    CHECK (source IN ('pin', 'session'));
+
 -- Entries written before the feed could link stay unlinked; there is no
 -- reliable way to recover which request an old free-text message referred to.
 ALTER TABLE activity ADD COLUMN IF NOT EXISTS mission_id INTEGER REFERENCES missions(id) ON DELETE SET NULL;
@@ -414,8 +424,8 @@ BEGIN
         RETURN;
     END IF;
 
-    INSERT INTO login_events (member_id, succeeded, user_agent)
-    VALUES (p_member_id, true, agent);
+    INSERT INTO login_events (member_id, succeeded, user_agent, source)
+    VALUES (p_member_id, true, agent, 'session');
 END;
 $$;
 
@@ -440,8 +450,8 @@ BEGIN
 
     matched := stored IS NOT NULL AND stored = crypt(p_pin, stored);
 
-    INSERT INTO login_events (member_id, succeeded, user_agent)
-    VALUES (p_member_id, matched, agent);
+    INSERT INTO login_events (member_id, succeeded, user_agent, source)
+    VALUES (p_member_id, matched, agent, 'pin');
 
     RETURN matched;
 END;
@@ -501,8 +511,8 @@ BEGIN
     -- stays empty — two separate RPCs, and only one needs to succeed for the
     -- activity row to appear.
     IF stored IS NULL THEN
-        INSERT INTO login_events (member_id, succeeded, user_agent)
-        VALUES (p_member_id, true, request_user_agent());
+        INSERT INTO login_events (member_id, succeeded, user_agent, source)
+        VALUES (p_member_id, true, request_user_agent(), 'pin');
     END IF;
 END;
 $$;

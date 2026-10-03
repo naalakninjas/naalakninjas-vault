@@ -3,7 +3,7 @@
 @import 'tailwindcss/utilities';
 
 @layer base {
-  :root {
+:root {
     /* Surfaces: each step is one level closer to the viewer */
     --surface-base: #08080B;
     --surface-raised: #101017;

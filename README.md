@@ -246,7 +246,7 @@ Ten tables:
 | `repayments` | Payments against a mission |
 | `bank_adjustments` | Statement lines nobody requested: fees (shrink the vault) or interest (grow it), told apart by `kind` |
 | `activity` | Append-only audit log, written by triggers. `mission_id` links an entry to the request it is about |
-| `login_events` | Every sign-in attempt, written by `verify_member_pin()` |
+| `login_events` | Every sign-in attempt, written by `verify_member_pin()`. `source` tells a real PIN check apart from a session just waking up |
 | `keep_alive_runs` | One row per keep-alive ping, cron or manual |
 | `vault_settings` | The business rules above, as key/value rows |
 

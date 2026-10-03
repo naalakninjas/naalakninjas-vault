@@ -6,6 +6,7 @@ import { Avatar, Badge, Button, EmptyState, Modal } from './ui'
 import { getNinjaBorderColor, getNinjaByName } from '../utils/ninjaHelpers.jsx'
 import { formatDateTime, formatRelative } from '../utils/format'
 import { showError, showSuccess } from '../utils/toast'
+import { dedupeSignIns } from '../utils/loginEvents'
 
 const TABS = [
   { key: 'signins', label: 'Sign-ins' },
@@ -232,6 +233,11 @@ const LastSeen = ({ lastSignIns, loadFailed }) => {
 }
 
 const SignInList = ({ events, lastSignIns, lastSeenLoadFailed }) => {
+  // The same visit can write two rows — see dedupeSignIns for why — and the
+  // list only needs to say "they were here", not how many of the app's
+  // internal hooks happened to notice it.
+  const visibleEvents = useMemo(() => dedupeSignIns(events), [events])
+
   if (events.length === 0) {
     return (
       <EmptyState
@@ -252,7 +258,7 @@ const SignInList = ({ events, lastSignIns, lastSeenLoadFailed }) => {
         </h3>
 
         <div className="divide-y divide-[color:var(--line-subtle)]">
-          {events.map((event) => {
+          {visibleEvents.map((event) => {
             const name = event.members?.name
             const ninja = getNinjaByName(name, ninjas)
 
